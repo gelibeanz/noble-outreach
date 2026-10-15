@@ -1,0 +1,22 @@
+# Mouse on the engine's loadout picker (Forge World Slayer, 1280x720). Times count from the map load
+# ("from map"); the picker fades in a few seconds later. Rows (client px, row centres): 1 Sprint (1064,155),
+# 2 Armor Lock (1100,247), 3 Jet Pack (1100,339), 4 Active Camo (1100,431), 5 Hologram (1100,523).
+from map
+6.0 log picker up
+6.0 capture lm-0-picker.bmp
+6.5 cursor 1100 247
+7.0 cursor 1100 339
+8.0 log hover row 3
+8.0 capture lm-1-hover-row3.bmp
+9.0 button left down
+9.1 button left up
+9.6 log clicked row 3
+9.6 capture lm-2-clicked.bmp
+11.0 capture lm-3-after.bmp
+16.0 log after spawn
+16.0 capture lm-4-spawned.bmp
+16.5 key LSHIFT down
+17.5 capture lm-5-ability.bmp
+17.6 log ability held
+18.0 key LSHIFT up
+18.5 exit

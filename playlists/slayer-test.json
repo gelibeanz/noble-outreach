@@ -1,0 +1,8 @@
+{
+  "name": "Slayer test",
+  "entries": [
+    { "name": "Slayer on Forge World", "mode": "slayer", "map": "forge_world",     "game_variant": "slayer_054.bin",     "weight": 1 },
+    { "name": "Slayer on Sword Base",  "mode": "slayer", "map": "20_sword_slayer", "game_variant": "slayer_054.bin",     "weight": 1 },
+    { "name": "Slayer Pro on Powerhouse", "mode": "slayer", "map": "30_settlement", "game_variant": "slayer_pro_054.bin", "weight": 1 }
+  ]
+}

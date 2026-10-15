@@ -1,0 +1,34 @@
+# Synthetic input for reach-host --test-input. Times are seconds after player 0 spawns.
+# Commands: key <name> down|up, button left|middle|right down|up, wheel <n>, turn <dx> <dy> <secs>,
+#           pad <buttons hex> <lt> <rt> <lx> <ly> <rx> <ry> | pad off, capture <file>, log <text>, exit
+2.0 log before
+2.0 capture input-0-start.bmp
+2.5 key W down
+4.5 key W up
+5.0 log after 2 s of W
+5.0 capture input-1-after-w.bmp
+5.5 turn 500 0 0.5
+7.0 log after turn 500 counts right
+7.0 capture input-2-after-turn.bmp
+7.5 key SPACE down
+7.6 log jumping
+7.7 key SPACE up
+8.0 log after jump
+9.0 button right down
+10.0 capture input-3-zoom.bmp
+10.0 log zoomed (rmb)
+10.5 button right up
+11.0 key LCTRL down
+12.0 log crouched
+12.0 capture input-4-crouch.bmp
+12.5 key LCTRL up
+13.0 pad 0 0 0 0 32767 0 0
+15.0 log after 2 s pad left stick forward
+15.0 pad 0 0 0 0 0 32767 0
+16.0 log after 1 s pad right stick right
+16.0 pad off
+16.5 button left down
+17.5 button left up
+18.0 log after firing
+18.0 capture input-5-fired.bmp
+19.0 exit

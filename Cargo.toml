@@ -1,0 +1,7 @@
+[workspace]
+resolver = "2"
+members = ["src/reach-tracer", "src/reach-host", "src/reach-master", "src/reach-launcher"]
+
+[profile.release]
+panic = "abort"
+opt-level = 2

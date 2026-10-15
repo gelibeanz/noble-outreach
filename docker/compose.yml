@@ -1,0 +1,121 @@
+# Noble Outreach dedicated server (+ optional own master server and egress firewall).
+#
+#   cp .env.example .env            then edit it (MCC_DIR at least)
+#   cp /path/to/reach-host.exe reach-server/     (from a release, or your own build)
+#   docker compose up -d                           server only (listed on REACH_MASTER if set)
+#   docker compose --profile master up -d          + your own master server on TCP 47880 / UDP 47881
+#   docker compose --profile firewall up -d        + egress lockdown for the server (Linux hosts, iptables)
+#
+# Ports: UDP 47800 = game (forward it on your router, or point a UDP tunnel at it). The master uses TCP 47880
+# (HTTP API) and UDP 47881 (NAT punch rendezvous).
+name: noble-outreach
+
+services:
+  # Dedicated Halo: Reach server: reach-host.exe --dedicated under Wine + DXVK in a hidden Xvfb window. It exits
+  # when the last player leaves and the entrypoint starts a fresh one. Strangers' UDP reaches a 2010 engine, so
+  # it runs locked down: non-root, no capabilities, read-only root fs (writable: /data and tmpfs /tmp).
+  reach-server:
+    image: noble-outreach/reach-server:latest
+    build:
+      context: ./reach-server
+      args:
+        UID: ${PUID:-1000}
+        GID: ${PGID:-1000}
+        NVIDIA_VERSION: ${NVIDIA_VERSION:?set NVIDIA_VERSION in .env (nvidia-smi driver version)}
+    networks: [reach-net]
+    ports:
+      - "47800:47800/udp"
+    # Public resolvers only (the firewall profile lets DNS out to exactly these; keep REACH_FW_DNS in step).
+    dns: [1.1.1.1, 1.0.0.1]
+    runtime: nvidia
+    user: "${PUID:-1000}:${PGID:-1000}"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    pids_limit: 400
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: all
+      HOME: /tmp
+      __GL_SHADER_DISK_CACHE_PATH: /data/nv-cache
+      REACH_MODE: ${REACH_MODE:-slayer}
+      REACH_MAP: ${REACH_MAP:-}
+      REACH_VARIANT: ${REACH_VARIANT:-}
+      REACH_DIFFICULTY: ${REACH_DIFFICULTY:-normal}
+      REACH_MAX_PLAYERS: ${REACH_MAX_PLAYERS:-16}
+      REACH_NAME: ${REACH_NAME:-}
+      REACH_MASTER: ${REACH_MASTER:-}
+      REACH_PUBLIC_ADDR: ${REACH_PUBLIC_ADDR:-}
+      REACH_PLAYLIST: ${REACH_PLAYLIST:-}
+      REACH_ARGS: ${REACH_ARGS:-}
+    volumes:
+      # Your own MCC install (the folder with haloreach/ and MCC/Binaries/Win64), read only.
+      - ${MCC_DIR:?set MCC_DIR in .env}:/mcc:ro
+      - ./data:/data
+      - ../playlists:/playlists:ro
+    mem_limit: 2560m
+    restart: unless-stopped
+    stop_grace_period: 10s
+
+  # Your own master server (server list + NAT punch rendezvous). Without one, players join by address. Players
+  # point their menu (Settings > Master server) at it.
+  # Behind a reverse proxy / Cloudflare Tunnel add "--trust-proxy" so it sees the players' real IPs.
+  reach-master:
+    profiles: [master]
+    image: noble-outreach/reach-master:latest
+    build:
+      context: ..
+      dockerfile: src/reach-master/Dockerfile
+    ports:
+      - "47880:47880"
+      - "47881:47881/udp"
+    command: ["--listen", "0.0.0.0:47880", "--rendezvous-listen", "0.0.0.0:47881"]
+    environment:
+      # host:port players reach UDP 47881 at (empty = not advertised; clients then skip the NAT punch).
+      REACH_MASTER_RENDEZVOUS_PUBLIC: ${REACH_RENDEZVOUS_PUBLIC:-}
+    mem_limit: 32m
+    restart: unless-stopped
+
+  # Host iptables rules that cut reach-server off from the LAN, other containers, host services and the
+  # internet, except DNS, a master on this host (TCP 47880) and, with REACH_FW_HTTPS=1, HTTPS (for a remote
+  # https:// master). Re-applied every 30 s. Undo: docker compose run --rm reach-firewall remove
+  reach-firewall:
+    profiles: [firewall]
+    image: noble-outreach/reach-firewall:latest
+    build:
+      context: ./reach-firewall
+    network_mode: host
+    environment:
+      REACH_FW_BRIDGE: br-reach
+      REACH_FW_SUBNET: ${REACH_NET_SUBNET:-10.213.47.0/28}
+      REACH_FW_MASTER_PORT: "47880"
+      REACH_FW_DNS: 1.1.1.1 1.0.0.1
+      REACH_FW_HTTPS: ${REACH_FW_HTTPS:-0}
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN, NET_RAW]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    # The host's iptables lock, shared with Docker.
+    volumes:
+      - /run/xtables.lock:/run/xtables.lock
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/reach-fw", "check"]
+      interval: 30s
+      timeout: 10s
+      start_period: 5s
+    mem_limit: 32m
+    restart: unless-stopped
+
+networks:
+  # reach-server only. Fixed bridge name and subnet the firewall rules match on; no traffic between containers.
+  reach-net:
+    name: reach-net
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: br-reach
+      com.docker.network.bridge.enable_icc: "false"
+    ipam:
+      config:
+        - subnet: ${REACH_NET_SUBNET:-10.213.47.0/28}

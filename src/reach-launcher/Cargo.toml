@@ -1,0 +1,21 @@
+[package]
+name = "reach-launcher"
+version = "0.1.0"
+edition = "2021"
+description = "Friend-facing launcher: finds MCC, checks the build, downloads reach-host from the master, starts it (Windows direct, Linux via umu)"
+
+[dependencies]
+rfd = "0.17"
+dirs = "6"
+sha2 = "0.10"
+ureq = "3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Linux: OpenGL (glow), small and works on X11 + Wayland. Windows: wgpu (D3D12/Vulkan), OpenGL drew only a white
+# window under Wine and is the least reliable path on Windows drivers too.
+[target.'cfg(not(windows))'.dependencies]
+eframe = { version = "0.36", default-features = false, features = ["default_fonts", "glow", "wayland", "x11", "links"] }
+
+[target.'cfg(windows)'.dependencies]
+eframe = { version = "0.36", default-features = false, features = ["default_fonts", "wgpu", "links"] }

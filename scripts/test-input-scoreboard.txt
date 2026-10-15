@@ -1,0 +1,9 @@
+# Scoreboard probe: Tab held 2 s, then pad Back held 2 s. Times are seconds after player 0 spawns.
+1.0 key TAB down
+2.5 capture sb-0-tab.bmp
+3.0 key TAB up
+4.0 pad 0020 0 0 0 0 0 0
+5.5 capture sb-1-pad-back.bmp
+6.0 pad 0000 0 0 0 0 0 0
+6.5 pad off
+7.0 exit

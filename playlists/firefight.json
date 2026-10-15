@@ -1,0 +1,14 @@
+{
+  "name": "Firefight",
+  "entries": [
+    { "name": "Firefight on Overlook",          "mode": "firefight", "map": "ff10_prototype",  "game_variant": "hr_ff_standard_1set.bin",         "difficulty": "normal", "weight": 2 },
+    { "name": "Firefight on Courtyard",         "mode": "firefight", "map": "ff20_courtyard",  "game_variant": "hr_ff_standard_1set.bin",         "difficulty": "normal", "weight": 1 },
+    { "name": "Firefight on Waterfront",        "mode": "firefight", "map": "ff30_waterfront", "game_variant": "hr_ff_standard_1set.bin",         "difficulty": "normal", "weight": 1 },
+    { "name": "Firefight on Corvette",          "mode": "firefight", "map": "ff45_corvette",   "game_variant": "hr_ff_standard_1set.bin",         "difficulty": "normal", "weight": 1 },
+    { "name": "Firefight on Beachhead",         "mode": "firefight", "map": "ff50_park",       "game_variant": "hr_ff_standard_1set.bin",         "difficulty": "normal", "weight": 1 },
+    { "name": "Gruntpocalypse on Glacier",      "mode": "firefight", "map": "ff60_icecave",    "game_variant": "hr_ff_gruntpocalypse_1round.bin", "difficulty": "normal", "weight": 1 },
+    { "name": "Rocketfight on Outpost",         "mode": "firefight", "map": "ff60_airview",    "game_variant": "hr_ff_rocketfight_1set.bin",      "difficulty": "normal", "weight": 1 },
+    { "name": "Generator Defense on Holdout",   "mode": "firefight", "map": "ff70_holdout",    "game_variant": "hr_ff_generatorDefense_1set.bin", "difficulty": "normal", "weight": 1 },
+    { "name": "Firefight on Unearthed",         "mode": "firefight", "map": "ff_unearthed",    "game_variant": "hr_ff_standard_1set.bin",         "difficulty": "heroic", "weight": 1 }
+  ]
+}

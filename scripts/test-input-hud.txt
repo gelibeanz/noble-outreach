@@ -1,0 +1,16 @@
+# HUD/text check: zoomed mouse look, HUD text and icons, scoreboard. Times are seconds after player 0 spawns.
+1.0 capture hud-0-spawn.bmp
+1.5 log before zoom
+2.0 button right down
+2.5 log zoomed, before turn
+2.6 turn 300 0 0.5
+3.4 log zoomed, after turn (yaw should change)
+3.5 capture hud-1-zoomed-turned.bmp
+4.0 button right up
+5.0 key TAB down
+5.6 capture hud-2-scoreboard.bmp
+6.0 key TAB up
+6.5 key G down
+6.6 key G up
+7.5 capture hud-3-grenade-switched.bmp
+8.0 exit

@@ -1,0 +1,24 @@
+# Third scripted check: hold each remaining key and log which engine actions read as held.
+2.0 key LCTRL down
+2.5 log hold LCtrl (crouch)
+2.5 capture keys-crouch.bmp
+3.0 key LCTRL up
+3.5 log released
+3.5 capture keys-stand.bmp
+4.0 key TAB down
+4.5 log hold Tab (scores)
+4.5 capture keys-tab.bmp
+5.0 key TAB up
+5.5 key LSHIFT down
+6.0 log hold LShift (ability)
+6.5 key LSHIFT up
+7.0 key E down
+7.3 log hold E (action)
+7.5 key E up
+8.0 key G down
+8.3 log hold G (grenade switch)
+8.5 key G up
+9.0 key R down
+9.3 log hold R (reload)
+9.5 key R up
+10.0 exit

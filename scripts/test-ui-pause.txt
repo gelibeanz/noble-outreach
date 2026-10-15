@@ -1,0 +1,8 @@
+# Pause overlay check, with REACH_UI_SHOT=play,pause,resume,leave: Esc opens the overlay (resumed by the
+# shot hook), a capture after resuming checks the engine still renders, a second Esc opens it again (left).
+3.0 key esc down
+3.1 key esc up
+7.0 capture ui-after-resume.bmp
+9.0 key esc down
+9.1 key esc up
+30 exit

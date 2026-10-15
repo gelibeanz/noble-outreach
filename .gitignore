@@ -1,0 +1,12 @@
+target/
+work/
+dist/
+.env
+docker/data/
+docker/reach-server/reach-host.exe
+# never game files
+*.dll
+*.map
+*.mvar
+*.bik
+*.bin

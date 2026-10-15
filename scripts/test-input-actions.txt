@@ -1,0 +1,43 @@
+# Second scripted check: remaining actions. Times are seconds after player 0 spawns.
+2.0 log start
+2.0 capture act-0-start.bmp
+2.5 key W down
+4.5 key W up
+4.6 log after 2 s of W (position should change)
+5.0 key SPACE down
+5.1 key SPACE up
+5.3 log mid-jump (z should be higher)
+6.5 log landed
+7.0 button left down
+7.6 button left up
+8.0 key R down
+8.1 key R up
+8.2 log reload pressed
+10.5 capture act-1-reloaded.bmp
+11.0 wheel 120
+11.5 log switched weapon (wheel up)
+12.5 capture act-2-switched.bmp
+13.0 key G down
+13.1 key G up
+13.5 capture act-3-grenade-switched.bmp
+14.0 key F down
+14.1 key F up
+14.4 capture act-4-grenade-thrown.bmp
+16.0 key Q down
+16.1 key Q up
+16.3 capture act-5-melee.bmp
+17.0 key LSHIFT down
+17.5 capture act-6-ability.bmp
+18.5 key LSHIFT up
+19.0 key LCTRL down
+20.0 capture act-7-crouch.bmp
+20.0 log crouching
+20.5 key LCTRL up
+21.0 key TAB down
+21.5 capture act-8-scoreboard.bmp
+22.0 key TAB up
+22.5 key ESC down
+22.6 key ESC up
+23.0 log after esc
+23.5 capture act-9-after-esc.bmp
+24.0 exit

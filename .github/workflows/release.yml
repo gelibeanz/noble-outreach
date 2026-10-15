@@ -1,0 +1,38 @@
+name: Release
+
+# Push a tag like v0.1.0: builds everything with scripts/build-release.sh and publishes a GitHub release with
+# RELEASE-NOTES.md. Launchers update from the latest release (assets checked against its SHA256SUMS), so the
+# asset names must stay as they are.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu, x86_64-unknown-linux-musl
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.14.1
+      - name: Install cargo-zigbuild
+        run: cargo install --locked cargo-zigbuild@0.23.4
+      - name: Test
+        run: cargo test --locked -p reach-master -p reach-launcher
+      - name: Build release files
+        run: scripts/build-release.sh "$GITHUB_REF_NAME" out
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes=()
+          if [ -f RELEASE-NOTES.md ]; then notes=(--notes-file RELEASE-NOTES.md); else notes=(--generate-notes); fi
+          gh release create "$GITHUB_REF_NAME" --title "Noble Outreach ${GITHUB_REF_NAME#v}" "${notes[@]}" \
+            out/NobleOutreach-Launcher.exe out/NobleOutreach-Launcher-linux out/reach-host.exe \
+            "out/NobleOutreach-Server-$GITHUB_REF_NAME.tar.gz" out/SHA256SUMS
