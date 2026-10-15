@@ -289,10 +289,10 @@ mod tests {
 
     #[test]
     fn roundtrip() {
-        let i = Info { name: "Zima".into(), version: "0.1".into(), map: "forge_world".into(), game_variant: "slayer_054.bin".into(), mode: 1, max_players: 8, dedicated: true, network_id: 7, session_id: 9, playlist: "Slayer".into() };
+        let i = Info { name: "Test Server".into(), version: "0.1".into(), map: "forge_world".into(), game_variant: "slayer_054.bin".into(), mode: 1, max_players: 8, dedicated: true, network_id: 7, session_id: 9, playlist: "Slayer".into() };
         let (tok, r) = decode_reply(&encode_reply(&i, 3, 42)).unwrap();
         assert_eq!((tok, r.players, r.info.max_players, r.info.mode, r.info.dedicated), (42, 3, 8, 1, true));
-        assert_eq!((r.info.name.as_str(), r.info.map.as_str(), r.info.session_id), ("Zima", "forge_world", 9));
+        assert_eq!((r.info.name.as_str(), r.info.map.as_str(), r.info.session_id), ("Test Server", "forge_world", 9));
         assert_eq!(r.info.playlist, "Slayer");
         assert!(decode_reply(&encode_request(1)).is_none());
     }

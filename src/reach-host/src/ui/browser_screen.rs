@@ -173,16 +173,16 @@ enum Msg {
 fn fake_entries() -> Vec<Entry> {
     // (name, map, variant, kind, players, max, ping, version, playlist)
     let rows: &[(&str, &str, &str, u8, u32, u32, u32, &str, &str)] = &[
-        ("Zima Slayer Night", "forge_halo", "slayer_054.bin", 0, 7, 16, 18, OUR_VERSION, "Slayer"),
+        ("Sword Base Slayer", "20_sword_slayer", "slayer_054.bin", 0, 7, 16, 18, OUR_VERSION, "Slayer"),
         ("Noble Team Firefight", "ff50_park", "hr_ff_standard_1set.bin", 1, 3, 4, 34, OUR_VERSION, "Firefight"),
-        ("Campaign co-op: Winter Contingency", "m10", "slayer_054.bin", 2, 2, 4, 52, OUR_VERSION, ""),
-        ("Big Team Battle with a very long server name that must be ellipsised", "70_boneyard", "team_slayer_054.bin", 0, 12, 16, 88, OUR_VERSION, "Team Slayer"),
-        ("Old build server", "45_aftship", "slayer_pro_054.bin", 0, 4, 8, 133, "0.0.9", ""),
-        ("Empty lobby", "cex_damnation", "slayer_054.bin", 0, 0, 12, 211, OUR_VERSION, ""),
-        ("Full house", "35_island", "slayer_054.bin", 0, 8, 8, 25, OUR_VERSION, "Slayer"),
-        ("Mission running", "m30", "slayer_054.bin", 2, 3, 4, 41, OUR_VERSION, ""),
-        ("Glacier Holdout", "ff60_icecave", "hr_ff_generatorDefense_1set.bin", 1, 1, 4, 305, OUR_VERSION, ""),
-        ("Sword Base Classic", "20_sword_slayer", "slayer_054.bin", 0, 5, 16, 64, OUR_VERSION, "Slayer"),
+        ("Legendary Campaign Co-op", "m10", "slayer_054.bin", 2, 2, 4, 52, OUR_VERSION, ""),
+        ("Boneyard Big Team Battle", "70_boneyard", "team_slayer_054.bin", 0, 12, 16, 88, OUR_VERSION, "Team Slayer"),
+        ("Forge World Builders", "forge_halo", "00_basic_editing_054.bin", 3, 4, 8, 47, OUR_VERSION, ""),
+        ("Countdown SWAT", "45_launch_station", "SWAT_054.bin", 0, 0, 12, 71, OUR_VERSION, ""),
+        ("Breakneck Snipers", "cex_headlong", "slayer_pro_054.bin", 0, 4, 8, 133, "0.0.9", ""),
+        ("Powerhouse Objective", "30_settlement", "ctf_054.bin", 0, 8, 8, 25, OUR_VERSION, "Objective"),
+        ("Long Night of Solace Co-op", "m45", "slayer_054.bin", 2, 3, 4, 41, OUR_VERSION, ""),
+        ("Glacier Holdout", "ff60_icecave", "hr_ff_generatorDefense_1set.bin", 1, 1, 4, 105, OUR_VERSION, ""),
     ];
     rows.iter()
         .enumerate()
@@ -190,7 +190,7 @@ fn fake_entries() -> Vec<Entry> {
             let info = ServerInfo {
                 name: r.0.into(),
                 version: r.7.into(),
-                addr: format!("10.9.0.{}:{}", n + 2, 47800 + n),
+                addr: format!("203.0.113.{}:{}", 20 + n * 7, 47800 + n), // TEST-NET-3: documentation range, never real
                 network_id: "0".into(),
                 session_id: "1".into(),
                 map: r.1.into(),
@@ -202,7 +202,7 @@ fn fake_entries() -> Vec<Entry> {
             let mut e = Entry::from_master(info);
             e.resolved = None;
             e.kind = r.3;
-            e.in_progress = r.0 == "Mission running";
+            e.in_progress = r.0 == "Long Night of Solace Co-op";
             e.mode = mode_label(r.3, r.2, e.in_progress, 0);
             e.ping = Some(r.6);
             e.live = true;
@@ -218,7 +218,7 @@ fn refresh_worker(masters: Vec<String>, favs: Vec<String>, tx: Sender<Msg>, answ
     if std::env::var_os("REACH_BROWSER_FAKE").is_some() {
         let list = fake_entries();
         total.store(list.len(), Ordering::Relaxed);
-        let _ = tx.send(Msg::Master(Ok(("fake".into(), list.iter().map(|e| e.info.clone()).collect()))));
+        let _ = tx.send(Msg::Master(Ok(("master.noble.example".into(), list.iter().map(|e| e.info.clone()).collect()))));
         for i in 0..list.len() {
             std::thread::sleep(Duration::from_millis(150));
             answered.store(i + 1, Ordering::Relaxed);

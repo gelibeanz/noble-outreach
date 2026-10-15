@@ -1,5 +1,7 @@
 # Noble Outreach
 
+![Firefight on Beachhead in Noble Outreach](docs/screenshots/firefight-combat.png)
+
 A standalone community client for **Halo: Reach** on PC. Our own host program (`reach-host`) loads the game
 engine (`haloreach.dll`) from **your own** copy of Halo: The Master Chief Collection and adds what the PC version
 lost: hosting your own listen and dedicated servers, a server browser, Firefight and campaign co-op online,
@@ -9,6 +11,12 @@ launcher that installs and updates everything.
 > **Not affiliated with Microsoft, 343 Industries or Halo Studios.** Halo is their trademark. Noble Outreach is a
 > non-commercial fan project. It ships no game files: every player needs a legitimate Steam copy of MCC with
 > Halo: Reach installed. It never connects to official matchmaking and does not touch Easy Anti-Cheat.
+
+## Screenshots
+| | | |
+|:-:|:-:|:-:|
+| [![Firefight](docs/screenshots/firefight-combat.png)](docs/screenshots/firefight-combat.png) | [![Campaign](docs/screenshots/campaign-vista.png)](docs/screenshots/campaign-vista.png) | [![Campaign menu](docs/screenshots/campaign-menu.png)](docs/screenshots/campaign-menu.png) |
+| Firefight on Beachhead, Heroic | Campaign: Winter Contingency | The campaign screen: missions, difficulty, skulls |
 
 ## Requirements
 - Halo: The Master Chief Collection on Steam, **build 2025.08.16** (`2025.08.16.178512.1`), with Halo: Reach
