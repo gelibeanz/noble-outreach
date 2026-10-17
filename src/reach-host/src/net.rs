@@ -162,6 +162,8 @@ fn recv_loop(sock: UdpSocket, net: Arc<Net>, gen: u32) {
             Ok((n, from)) if crate::lobby::handle(&buf[..n], from) => {}
             // Wake packets for a dormant dedicated server (dormant.rs).
             Ok((n, from)) if crate::dormant::handle(&buf[..n], from) => {}
+            // A kicked player (call vote, callvote.rs): nothing of theirs reaches the engine again in this process.
+            Ok((n, from)) if n >= HEADER && buf[..4] != BYE_MAGIC && is_banned(u64::from_le_bytes(buf[4..12].try_into().unwrap()), from) => {}
             // Dormant / engine still starting: wake on the first engine datagram, drop it (the joiner retries).
             Ok((n, from)) if n >= HEADER && buf[..4] != BYE_MAGIC && crate::dormant::gate_engine_datagram(from) => {}
             Ok((n, from)) if n >= 16 && buf[..4] == BYE_MAGIC => {
@@ -439,4 +441,46 @@ pub fn send_raw(addr: SocketAddr, pkt: &[u8]) {
     if let Some(net) = net() {
         let _ = net.sock.send_to(pkt, addr);
     }
+}
+
+/// Kicked peers (net ids and addresses), refused for the rest of this process.
+static BANNED: Mutex<(Vec<u64>, Vec<SocketAddr>)> = Mutex::new((Vec::new(), Vec::new()));
+
+/// Was this id or address kicked?
+pub fn is_banned(id: u64, from: SocketAddr) -> bool {
+    let b = BANNED.lock().unwrap();
+    b.0.contains(&id) || b.1.contains(&from)
+}
+
+/// Host: kick peer `id` (call vote). Stops sending to it, drops it from the game session on the game thread
+/// (`drop_left_peers`, the same engine path as a bye) and refuses its datagrams from now on. Returns its address.
+pub fn kick(id: u64) -> Option<SocketAddr> {
+    let net = net()?;
+    let mut peers = net.peers.lock().unwrap();
+    let p = peers.iter_mut().find(|p| p.id == id)?;
+    p.left.get_or_insert_with(Instant::now);
+    let addr = p.addr;
+    drop(peers);
+    let mut b = BANNED.lock().unwrap();
+    b.0.push(id);
+    b.1.push(addr);
+    drop(b);
+    BYE_QUEUE.lock().unwrap().push(id);
+    log!("net: kicked peer {id:#x} ({addr}); refused from now on");
+    Some(addr)
+}
+
+/// Are we the session host (instance 0: listen host or dedicated server)?
+pub fn is_host() -> bool {
+    net().is_some_and(|n| n.my_id == net_id(0))
+}
+
+/// Side channels: network id of the peer at `addr`.
+pub fn peer_id_of(addr: SocketAddr) -> Option<u64> {
+    net()?.peers.lock().unwrap().iter().find(|p| p.addr == addr).map(|p| p.id)
+}
+
+/// Side channels: address of peer `id` (None once it said bye or was kicked).
+pub fn peer_addr_of(id: u64) -> Option<SocketAddr> {
+    net()?.peers.lock().unwrap().iter().find(|p| p.id == id && p.left.is_none()).map(|p| p.addr)
 }

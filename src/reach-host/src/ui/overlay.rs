@@ -31,6 +31,8 @@ static OPENS: AtomicU32 = AtomicU32::new(0);
 enum Page {
     Main,
     Settings,
+    /// CALL A VOTE > Kick player: pick who (ui/vote.rs `kick_picker`).
+    Kick,
 }
 
 struct State {
@@ -56,6 +58,7 @@ pub fn open() {
         FRAMES.store(0, Ordering::Relaxed);
         OPENS.fetch_add(1, Ordering::Relaxed);
         *STATE.lock().unwrap_or_else(|e| e.into_inner()) = State { page: Page::Main, settings: None };
+        crate::callvote::request_caps(); // CALL A VOTE greys out what the host cannot run
         super::post_to_window(super::WM_UI_OPEN);
     }
 }
@@ -77,6 +80,17 @@ pub fn reset() {
 /// When the player chose LEAVE GAME (main loop then says bye to the peers and returns to the menu at once).
 pub fn leave_requested() -> Option<Instant> {
     *LEAVE_AT.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Next-game vote page (ui/vote.rs): LEAVE LOBBY.
+pub fn leave_game() {
+    leave();
+}
+
+/// Next-game vote page: SETTINGS opens the pause overlay on its settings page.
+pub fn open_settings() {
+    open();
+    STATE.lock().unwrap_or_else(|e| e.into_inner()).page = Page::Settings;
 }
 
 fn leave() {
@@ -263,20 +277,29 @@ fn draw_ui(ui: &mut egui::Ui, st: &mut State) {
             ui.label(egui::RichText::new("LEAVING GAME ...").size(20.0).color(DIM));
             return;
         }
-        if theme::nav_item(ui, "Resume", false).clicked() || (esc && st.page == Page::Main) {
+        if st.page != Page::Kick && (theme::nav_item(ui, "Resume", false).clicked() || (esc && st.page == Page::Main)) {
             close();
         }
         if theme::nav_item(ui, "Settings", st.page == Page::Settings).clicked() {
             st.page = Page::Settings;
         }
-        // Joined to a server: ask it for a playlist vote now (the panel shows once the pause menu closes).
-        if crate::vote::can_call() && theme::nav_item(ui, "Vote for a new game", false).clicked() {
-            crate::vote::call();
-            close();
+        if st.page == Page::Kick {
+            match super::vote::kick_picker(ui) {
+                Some(true) => close(),
+                Some(false) => st.page = Page::Main,
+                None => {}
+            }
+            return;
         }
         ui.add_space(14.0);
         if theme::nav_item(ui, "Leave game", false).clicked() {
             leave();
+        }
+        // Network game: CALL A VOTE (shuffle, kick, skip, restart; ui/vote.rs).
+        match super::vote::call_section(ui) {
+            super::vote::CallAction::Called => close(),
+            super::vote::CallAction::PickKick => st.page = Page::Kick,
+            super::vote::CallAction::None => {}
         }
         super::forge::pause_section(ui); // Forge game: name + SAVE MAP
         if let Some((lines, hint)) = super::hostinfo::lines() {

@@ -239,6 +239,44 @@ version = 1, u8 kind, u8 entry count (table; 0 otherwise), u8 0.
   changes); client `ping: table from the host: …` when counts change.
 - Older builds treat an `RPNG` datagram as an engine datagram from an unknown id (logged junk peer, harmless).
 
+### Call votes (2026-10-17, `src/reach-host/src/callvote.rs`, panel in `ui/vote.rs`)
+Same header and version (1): older clients and servers ignore unknown kinds, so no bump. Run by any host (listen or
+dedicated); the host decides on its game thread (`vote::game_tick` → `callvote::game_tick`). Header id = call id.
+
+| Kind | Direction | Body after the header |
+|---|---|---|
+| 5 call | client → host | u8 call kind (0 shuffle teams, 1 kick player, 2 skip to next game, 3 restart game), 3 × 0, target name (≤32, kick only) |
+| 6 ballot | client → host | u8 1 yes / 0 no, 3 × 0 |
+| 7 status | host → every peer, every 1 s and after each ballot | u8 kind, u8 seconds left, u8 yes, u8 no, u8 voters, u8 needed, 2 × 0, caller (≤32), target (≤32) |
+| 8 outcome | host → every peer 3× (passed/failed), → the caller (refused) | u8 kind, u8 result (0 failed, 1 passed, 2 refused), u8 yes, u8 no, caller, target, text (≤120: what happened / why refused) |
+| 9 caps request | client → host (pause menu opened) | none |
+| 10 caps | host → that client | u8 kinds mask (bit = kind), u8 seconds until it may call again, u8 1 = a call is running, 0 |
+| 11 kicked | host → the kicked client 3× | 4 × 0, text |
+
+- Rules: 30 s; voters = peers heard from in 4 s plus a listen host's own player, minus a kick target; needed =
+  voters / 2 + 1; the caller counts as yes; fails early when the no votes make the mark unreachable. One call at a
+  time, 60 s cooldown per caller. Kinds offered (caps): shuffle = multiplayer with 2+ players on teams; kick = another
+  player present (never the host); skip = playlist server; restart = dedicated server.
+- Effects: skip → `vote::open_skip` (a next-game round without the current entry, no "keep playing"); restart →
+  `vote::restart_same` (RESULT with restart set into the current entry / same arguments, exit 3; clients follow as
+  after any vote restart); kick → `net::kick` (stop sending, queue for `drop_left_peers`, refuse its id and address
+  for the rest of the process; names are re-kicked if they rejoin under a new id), KICKED to it (its main loop returns
+  to the menu with that text).
+- **Team change (shuffle), engine side:** writing the player datum team byte (+0xAD) directly is wrong: the engine
+  re-derives it, and a team left empty ends the game at once (team Slayer, seen in 2 ms). The working path is the
+  session membership: session `*0x182a1fe08`, player mask +0x173c, player records of 0xb0 at +0x1740 (+0x04 xuid,
+  +0x0c peer index, +0x20 the player's configuration, 0x80 bytes: name first, team at +0x78 and +0x79). Write the new
+  team bytes, then add 1 to the membership update number +0x38 (replicates the membership to the peers) and to the
+  players-changed counter +0x4468 (the simulation's player-update builder 0x18041f510 diffs every configuration
+  against its copy and queues a "set configuration" player update; `PlayerSetConfiguration` 0x1800440a4 applies it on
+  every machine: kills the unit when the team differs, writes datum +0xAC/+0xAD, calls the team-changed hook
+  0x180104d54; the player respawns on the new team). The engine's own membership changes bump both counters the same
+  way (e.g. 0x180391466). All moves must go in with one bump. Without the +0x38 bump only the host changed.
+  Verified 2026-10-17 on a 2-instance listen pair (team Slayer DMR): host and client datum + membership teams swapped,
+  both units respawned, game went on, Tab scoreboard on the client showed the new colours.
+- `mp_round_end` (HS) ends a listen-hosted game, but slot 26 is not called and the engine shuts down after the
+  post-game (state 10 → 5): no in-engine restart on listen hosts, so restart stays dedicated-only.
+
 ## NAT punch (2026-10-15, `src/reach-host/src/nat.rs`, master side `src/reach-master/src/rendezvous.rs`)
 
 Lets a friend's listen server (menu HOST, `--listen`) be joined without a port forward on routers with

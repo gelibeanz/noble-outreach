@@ -72,6 +72,11 @@ pub fn set_info(info: Info) {
     *INFO.lock().unwrap() = Some(info);
 }
 
+/// What this host answers with (map, variant, mode), if it is a host.
+pub fn info() -> Option<Info> {
+    INFO.lock().unwrap().clone()
+}
+
 pub fn mode_name(m: u8) -> &'static str {
     match m {
         MODE_FIREFIGHT => "firefight",

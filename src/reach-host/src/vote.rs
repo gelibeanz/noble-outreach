@@ -15,6 +15,10 @@ use std::time::{Duration, Instant};
 use crate::log;
 use crate::playlist;
 
+/// In-game call votes (shuffle, kick, skip, restart) live in callvote.rs; these are their public entry points.
+#[allow(unused_imports)] // used by the scoreboard's per-player menu (kick) after the merge
+pub use crate::callvote::{call_vote, CallKind};
+
 pub const MAGIC: [u8; 4] = *b"RVOT";
 pub const VERSION: u8 = 1;
 const KIND_OPEN: u8 = 1; // server -> clients: options, seconds left, tally (repeated every second)
@@ -60,7 +64,7 @@ pub struct ResultMsg {
 
 // ---- wire ---------------------------------------------------------------------------------------------------
 
-fn put_str(o: &mut Vec<u8>, s: &str, max: usize) {
+pub(crate) fn put_str(o: &mut Vec<u8>, s: &str, max: usize) {
     let mut n = s.len().min(max);
     while !s.is_char_boundary(n) {
         n -= 1;
@@ -69,15 +73,15 @@ fn put_str(o: &mut Vec<u8>, s: &str, max: usize) {
     o.extend_from_slice(&s.as_bytes()[..n]);
 }
 
-struct Rd<'a>(&'a [u8], usize);
+pub(crate) struct Rd<'a>(pub &'a [u8], pub usize);
 
 impl Rd<'_> {
-    fn u8(&mut self) -> Option<u8> {
+    pub fn u8(&mut self) -> Option<u8> {
         let v = *self.0.get(self.1)?;
         self.1 += 1;
         Some(v)
     }
-    fn str(&mut self) -> Option<String> {
+    pub fn str(&mut self) -> Option<String> {
         let n = self.u8()? as usize;
         let v = String::from_utf8_lossy(self.0.get(self.1..self.1 + n)?).into_owned();
         self.1 += n;
@@ -85,7 +89,7 @@ impl Rd<'_> {
     }
 }
 
-fn header(kind: u8, id: u16) -> Vec<u8> {
+pub(crate) fn header(kind: u8, id: u16) -> Vec<u8> {
     let mut o = Vec::with_capacity(256);
     o.extend_from_slice(&MAGIC);
     o.push(VERSION);
@@ -148,12 +152,12 @@ fn decode_result(p: &[u8]) -> Option<ResultMsg> {
     Some(ResultMsg { id: u16::from_le_bytes([p[6], p[7]]), winner, restart, difficulty, opt: get_opt(&mut r)? })
 }
 
-fn opt_of(i: usize) -> Opt {
+pub(crate) fn opt_of(i: usize) -> Opt {
     let e = &playlist::get().unwrap().entries[i];
     Opt { mode: playlist::mode_byte(e), name: e.name.clone(), map: e.map.clone(), game_variant: e.game_variant.clone().unwrap_or_default() }
 }
 
-fn difficulty_byte(s: Option<&str>) -> u8 {
+pub(crate) fn difficulty_byte(s: Option<&str>) -> u8 {
     match s {
         Some("easy") => 0,
         Some("heroic") => 2,
@@ -170,6 +174,8 @@ enum Reason {
     GameEnd,
     /// A player asked for one mid-game (pause menu); the current game is not among the options.
     Called,
+    /// A "skip to next game" call vote passed: like Called, but without "keep playing" (this game is over).
+    Skip,
 }
 
 struct Round {
@@ -192,8 +198,8 @@ struct Server {
 }
 
 static SERVER: Mutex<Server> = Mutex::new(Server { round: None, next_id: 1, result: None });
-static IS_SERVER: AtomicBool = AtomicBool::new(false);
-/// Open request from the game thread / slot 26 / a player: 0 none, 1 pre-game, 2 game end, 3 called.
+pub(crate) static IS_SERVER: AtomicBool = AtomicBool::new(false);
+/// Open request from the game thread / slot 26 / a player: 0 none, 1 pre-game, 2 game end, 3 called, 4 skip.
 static OPEN_REQ: AtomicU8 = AtomicU8::new(0);
 /// Pre-game vote: 0 not started (hold state 8 once a player is in), 1 running (hold), 2 done (release).
 static PREGAME: AtomicU8 = AtomicU8::new(0);
@@ -218,6 +224,48 @@ pub fn parse(argv: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+/// Call vote "skip to next game" passed (callvote.rs): open a next-game round without the current entry.
+/// False when this is not a playlist server or a round / result is already running.
+pub fn open_skip() -> bool {
+    if !IS_SERVER.load(Ordering::Relaxed) {
+        return false;
+    }
+    let s = SERVER.lock().unwrap();
+    if s.round.is_some() || s.result.is_some() {
+        return false;
+    }
+    OPEN_REQ.store(4, Ordering::Relaxed);
+    true
+}
+
+/// Set by `restart_same` on a dedicated server without a playlist (tick then only runs the result resends).
+static RESTARTING: AtomicBool = AtomicBool::new(false);
+
+/// Call vote "restart game" passed on a dedicated server: tell the clients to follow (RESULT with restart set, the
+/// same message a vote restart sends), then exit with code 3 so the supervisor starts the same game again. A
+/// playlist server restarts into the entry it plays (`vote-next.json`); without a playlist the supervisor reuses
+/// the same arguments. False if a vote result is already going out.
+pub fn restart_same() -> bool {
+    let mut s = SERVER.lock().unwrap();
+    if s.result.is_some() {
+        return false;
+    }
+    let id = s.next_id;
+    s.next_id = s.next_id.wrapping_add(1).max(1);
+    s.round = None;
+    let (opt, difficulty, entry) = match playlist::get() {
+        Some(p) => (opt_of(p.current), difficulty_byte(p.entries[p.current].difficulty.as_deref()), p.current),
+        None => {
+            let i = crate::query::info().unwrap_or_default();
+            (Opt { mode: i.mode, name: i.name.clone(), map: i.map.clone(), game_variant: i.game_variant.clone() }, 1, usize::MAX)
+        }
+    };
+    log!("vote: restarting the server into the same game ({} on {})", opt.name, opt.map);
+    s.result = Some((ResultMsg { id, winner: 0, restart: true, difficulty, opt }, 3, Instant::now(), Some(entry)));
+    RESTARTING.store(true, Ordering::Relaxed);
+    true
+}
+
 /// Host slot 26 (a game ended, the engine asks for the next one): open the end-of-game vote.
 pub fn game_ended() {
     if IS_SERVER.load(Ordering::Relaxed) {
@@ -233,6 +281,7 @@ pub unsafe fn game_tick(base: usize) {
     const OPTIONS_PLAYER_COUNT: usize = 0x2497288;
     const RVA_JOINED_COUNT: usize = 0x2a3838;
     const HOLD: i32 = 64;
+    crate::callvote::game_tick(base); // call votes run on any host (listen or dedicated)
     if !IS_SERVER.load(Ordering::Relaxed) {
         return;
     }
@@ -270,7 +319,7 @@ fn open_round(s: &mut Server, reason: Reason, none_allowed: bool, exclude: &[usi
     s.next_id = s.next_id.wrapping_add(1).max(1);
     let secs = SECS.load(Ordering::Relaxed);
     let list: Vec<String> = options.iter().enumerate().map(|(k, &i)| format!("{} \"{}\"", k + 1, p.entries[i].name)).collect();
-    log!("vote: round {id} open ({}): {}{}, {secs} s", match reason { Reason::PreGame => "pre-game", Reason::GameEnd => "game over", Reason::Called => "called by a player" }, list.join(", "), if none_allowed { ", 4 none of the above" } else { "" });
+    log!("vote: round {id} open ({}): {}{}, {secs} s", match reason { Reason::PreGame => "pre-game", Reason::GameEnd => "game over", Reason::Called => "called by a player", Reason::Skip => "skip to next game" }, list.join(", "), if none_allowed { ", 4 none of the above" } else { "" });
     s.round = Some(Round { id, reason, options, none_allowed, deadline: Instant::now() + Duration::from_secs(secs as u64), votes: HashMap::new(), last_send: None, early: false });
 }
 
@@ -295,7 +344,7 @@ fn open_msg(r: &Round, voters: usize) -> OpenMsg {
     }
 }
 
-fn broadcast(pkt: &[u8]) -> usize {
+pub(crate) fn broadcast(pkt: &[u8]) -> usize {
     let peers = crate::net::active_peer_addrs(Duration::from_secs(4));
     for a in &peers {
         crate::net::send_raw(*a, pkt);
@@ -326,7 +375,7 @@ pub fn announce_next_mission(map: &str, name: &str, difficulty: &str) -> usize {
 
 /// Main thread, every ~10 ms on a dedicated server.
 pub fn tick() {
-    if !IS_SERVER.load(Ordering::Relaxed) {
+    if !IS_SERVER.load(Ordering::Relaxed) && !RESTARTING.load(Ordering::Relaxed) {
         return;
     }
     let mut s = SERVER.lock().unwrap();
@@ -340,6 +389,10 @@ pub fn tick() {
             if *left == 0 {
                 let restart = *restart;
                 s.result = None;
+                if restart == Some(usize::MAX) {
+                    log!("vote: restarting the server with the same arguments (exit code 3, supervisor restarts)");
+                    std::process::exit(3);
+                }
                 if let Some(e) = restart {
                     match playlist::write_next(e) {
                         Ok(()) => log!("vote: restarting the server into entry {} \"{}\" (exit code 3, supervisor restarts)", e + 1, playlist::get().unwrap().entries[e].name),
@@ -351,6 +404,9 @@ pub fn tick() {
         }
         return;
     }
+    if !IS_SERVER.load(Ordering::Relaxed) {
+        return;
+    }
     let req = OPEN_REQ.swap(0, Ordering::Relaxed);
     if s.round.is_none() {
         match req {
@@ -359,6 +415,10 @@ pub fn tick() {
             3 => {
                 let cur = playlist::get().unwrap().current;
                 open_round(&mut s, Reason::Called, true, &[cur]);
+            }
+            4 => {
+                let cur = playlist::get().unwrap().current;
+                open_round(&mut s, Reason::Skip, true, &[cur]);
             }
             _ => return,
         }
@@ -539,6 +599,11 @@ pub fn handle(_sock: &UdpSocket, pkt: &[u8], from: SocketAddr) -> bool {
     if pkt[4] != VERSION {
         return true;
     }
+    // Call votes (kinds 5-11) on any host, listen or dedicated.
+    if (crate::callvote::KIND_FIRST..=crate::callvote::KIND_LAST).contains(&pkt[5]) {
+        crate::callvote::handle(pkt, from);
+        return true;
+    }
     if IS_SERVER.load(Ordering::Relaxed) {
         if pkt[5] == KIND_CAST {
             record_cast(pkt, from);
@@ -694,13 +759,6 @@ pub fn await_previous() {
         }
     }
 }
-
-// stub: replaced by feat/votes
-#[allow(dead_code)]
-pub enum CallKind { Shuffle, Kick, Skip, Restart }
-
-// stub: replaced by feat/votes
-pub fn call_vote(kind: CallKind, target: Option<&str>) -> bool { let _ = (kind, target); false }
 
 #[cfg(test)]
 mod tests {

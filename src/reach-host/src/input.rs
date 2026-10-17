@@ -597,6 +597,10 @@ unsafe fn raw_input(h: HRAWINPUT) {
         if down && (0x31..=0x34).contains(&vk) && crate::ui::vote::key(vk - 0x31) {
             return;
         }
+        // F5 / F6: yes / no on an open call vote (callvote.rs); otherwise they reach the engine as usual.
+        if down && (vk == 0x74 || vk == 0x75) && crate::callvote::key(vk == 0x74) {
+            return;
+        }
         if down && vk == 0x08 && crate::ui::vote::hide_key() {
             return; // Backspace: hide the vote panel for this round
         }
@@ -1034,6 +1038,8 @@ enum Cmd {
     Hs(String),
     /// `forge save <name>`: save the live Forge map variant (forge.rs).
     Forge(Vec<String>),
+    /// `vote yes|no|call <kind> [target]|...`: call votes (callvote.rs `script_command`).
+    Vote(Vec<String>),
     Exit,
 }
 
@@ -1125,6 +1131,7 @@ fn parse_step(line: &str) -> Result<Option<Step>, String> {
         "log" => Cmd::Log(w[2..].join(" ")),
         "hs" => Cmd::Hs(w[2..].join(" ")),
         "forge" => Cmd::Forge(w[2..].iter().map(|x| x.to_string()).collect()),
+        "vote" => Cmd::Vote(w[2..].iter().map(|x| x.to_string()).collect()),
         "set" if w.len() >= 4 => Cmd::Set(w[2..].iter().map(|x| x.to_string()).collect()),
         "exit" => Cmd::Exit,
         other => return Err(format!("unknown command {other}")),
@@ -1280,6 +1287,7 @@ fn run_script(s: &mut State) {
             }
             Cmd::Set(a) => script_set(a),
             Cmd::Forge(a) => crate::forge::script_command(a),
+            Cmd::Vote(a) => crate::callvote::script_command(a),
             Cmd::Hs(e) if e == "?dir" => unsafe { crate::preview::director_dump() },
             Cmd::Hs(e) => _ = crate::preview::hs(e),
             Cmd::Exit => {

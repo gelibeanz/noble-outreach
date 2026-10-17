@@ -1,16 +1,17 @@
-# Noble Outreach 0.3.0
+# Noble Outreach 0.3.1
 
 A standalone community client for Halo: Reach on PC. It runs the engine from your own Steam copy of Halo: The
-Master Chief Collection. This release is about the menus and moving from one game to the next.
+Master Chief Collection. This release is about the menus, voting, and moving from one game to the next. 0.3.1 adds the vote screens
+and in-game votes on top of 0.3.0.
 
 **You need:** MCC on Steam, build **2025.08.16** (`2025.08.16.178512.1`), with Halo: Reach installed. Linux
 also needs [umu-launcher](https://github.com/Open-Wine-Components/umu-launcher). The launcher updates itself from
-0.2.0.
+0.2.0 and 0.3.0.
 
 ## Downloads
 - `NobleOutreach-Launcher.exe` (Windows, unsigned: SmartScreen > More info > Run anyway) or
   `NobleOutreach-Launcher-linux` (`chmod +x`). The launcher installs and updates the game client.
-- `NobleOutreach-Server-v0.3.0.tar.gz`: dedicated server (`reach-host.exe --dedicated`) and a static `reach-master`.
+- `NobleOutreach-Server-v0.3.1.tar.gz`: dedicated server (`reach-host.exe --dedicated`) and a static `reach-master`.
 - `reach-host.exe` and `SHA256SUMS` are what the launcher downloads and checks.
 
 ## Main menu
@@ -29,10 +30,21 @@ also needs [umu-launcher](https://github.com/Open-Wine-Components/umu-launcher).
 - After many games in one session the client starts the next game in a fresh process to free memory, so you
   may see the window reopen then.
 
+## Voting
+- **Vote for the next game** on a full lobby page between games: the map, game type and playlist on the left,
+  three choices with the map's art, the game type's description and live vote counts, plus None of the above,
+  and the players with their teams on the right. In a match the vote shows as a compact card. Keys 1-4, the
+  mouse, or the d-pad and A.
+- **In-game votes** from the pause menu (*CALL A VOTE*): **Shuffle teams**, **Kick player**, **Skip to next game**
+  (playlist servers) and **Restart game** (dedicated servers). Everyone gets a card at the right edge: **F5** yes,
+  **F6** no. A vote passes with a majority of the players in the game; the caller counts as yes. 30 seconds per
+  vote, one at a time, and a minute between two calls from the same player.
+- A kicked player goes back to the menu with a notice and cannot rejoin that server until it restarts.
+
 ## Scoreboard
 - Hold **Tab** (pad: Back): teams with their scores, then each player's score, kills, deaths, assists and ping.
-- Right-click while holding Tab to use the mouse: the menu next to a player copies their name. Vote to kick
-  comes with the in-game votes in the next release.
+- Right-click while holding Tab to use the mouse: the menu next to a player starts a vote to kick them or
+  copies their name.
 
 ## Controls
 - *Settings > Keyboard & mouse* shows the real key for every action, including Forge and Theater, instead of

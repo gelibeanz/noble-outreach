@@ -296,3 +296,22 @@ Volume = `Settings.audio.menu_music` (Audio page, "Menu music"), re-read live; 0
 - Ident header synthesised for lewton: channels 2, 48000 Hz, blocksizes 256/2048 (byte 0xB8).
 - Test hooks: `REACH_MUSIC_DUMP=<wav>` writes the first 30 s decoded and logs RMS instead of playing;
   `REACH_MUSIC_TRACKS=1` (with DUMP) logs per-track length, rms and diff/rms (about 0.1 for real music, 1.0 = noise).
+
+## Vote screens (2026-10-17, `ui/vote.rs`)
+- **Next-game vote page** (Reclaimer's lobby page in our theme), whenever a next-game round is open and no player
+  unit is alive (post-game, pre-game wait, dead, loading): CUSTOM GAME title, tabs SETTINGS (pause overlay's settings)
+  and LEAVE LOBBY (the leave path); left GAME column (map, game type + base-mode chip, playlist) and a state banner;
+  centre the countdown with a shrinking accent line and 3 cards (map art `HREACHMP_<KEY>` / `REACHFIREFIGHT_<KEY>` /
+  `HREACH_<mission key>` from the install, map name, game type · base mode, description, votes, vote-share fill) and
+  NONE OF THE ABOVE / KEEP PLAYING; right the players from the engine table (team colour, name, YOU) and team sizes.
+  Not shown because we have no data for them: emblems, service tags, rank icons, LAST GAME REPORT, CUSTOMIZE.
+  Game type name and description come from the variant file's content header (UTF-16 at 0xC0 / 0x1C0); built-in
+  variants carry a `$hr_gvar_…` key there, then a line of our own per base mode is used.
+- In play: a compact card at the top centre (options, tallies, countdown); 1-4 vote, Backspace hides it.
+- **Call vote card** at the right edge, mid-height (on the players column over the page): kind, seconds, question,
+  caller, yes bar with the pass tick, YES/NO counts, needed, [F5] YES / [F6] NO (keys via input.rs raw input, and egui
+  while the page has the cursor); then the result for 6 s. Pause menu: CALL A VOTE section (greyed with the reason when
+  the host cannot run a kind), Kick opens a player picker. A host without call votes: the old VOTE FOR A NEW GAME item.
+- Test hooks: `REACH_VOTE_FAKE=next,call[,page]` (made-up next-game round / call vote; `page` forces the page after 150
+  frames), `REACH_VOTE_SHOT=1` (`vote-panel.bmp` frame 90, `vote-page.bmp` frame 240, `vote-result.bmp`); test script
+  `vote call <shuffle|kick|skip|restart> [name]`, `vote yes|no`, `vote teams`, `vote members`, `vote team <name> <t>`.

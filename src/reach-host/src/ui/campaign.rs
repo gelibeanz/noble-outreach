@@ -31,6 +31,11 @@ const MISSIONS: &[(&str, &str, &str, &str)] = &[
     ("m70_bonus", "Lone Wolf", "C11_LONEWOLF", "The last stand of Noble Six."),
 ];
 
+/// Texture-pack thumbnail of a mission (`HREACH_<key>`), for the vote cards (ui/vote.rs).
+pub fn mission_art(stem: &str) -> Option<String> {
+    MISSIONS.iter().find(|m| m.0 == stem).map(|m| format!("HREACH_{}", m.2))
+}
+
 /// The mission after `stem` in story order whose map is installed (None after Lone Wolf).
 pub fn next_mission(stem: &str, mcc: &std::path::Path) -> Option<&'static str> {
     let i = MISSIONS.iter().position(|m| m.0 == stem)?;

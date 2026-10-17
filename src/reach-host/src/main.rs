@@ -4,6 +4,7 @@
 
 mod audio;
 mod browser;
+mod callvote;
 mod crash;
 mod dormant;
 mod forge;
@@ -590,6 +591,7 @@ fn reset_game_state() {
     lobby::reset();
     net::reset_game();
     vote::end_follow();
+    callvote::reset();
     *host::NEXT_GAME_OPTIONS.lock().unwrap_or_else(|e| e.into_inner()) = None;
     host::DEDICATED.store(false, std::sync::atomic::Ordering::Relaxed);
     host::LISTEN.store(false, std::sync::atomic::Ordering::Relaxed);
@@ -814,10 +816,12 @@ unsafe fn play_game(args: &Args, argv: &[String], from_menu: bool, gfx: &Gfx, dl
         }
         if net::HOST_LEFT.load(std::sync::atomic::Ordering::Relaxed) && !vote::following() {
             log!("host left the game: returning to the menu");
+            // Kicked by a call vote: say so instead.
+            let why = callvote::kicked().unwrap_or_else(|| "The host left the game.".into());
             if seamless {
-                break seamless::Next::Menu(Some("The host left the game.".into()));
+                break seamless::Next::Menu(Some(why));
             }
-            ui::relaunch_to_menu_with(&args.mcc, Some("The host left the game."));
+            ui::relaunch_to_menu_with(&args.mcc, Some(&why));
         }
         cpu.tick();
         if lobby::LISTEN.load(std::sync::atomic::Ordering::Relaxed) {
