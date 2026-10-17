@@ -1,17 +1,17 @@
-# Noble Outreach 0.3.1
+# Noble Outreach 0.3.2
 
 A standalone community client for Halo: Reach on PC. It runs the engine from your own Steam copy of Halo: The
-Master Chief Collection. This release is about the menus, voting, and moving from one game to the next. 0.3.1 adds the vote screens
-and in-game votes on top of 0.3.0.
+Master Chief Collection. This release is about the menus, voting, and moving from one game to the next. 0.3.1 added the vote screens
+and in-game votes; 0.3.2 fixes the mouse after leaving a game and gives the launcher its own icon.
 
 **You need:** MCC on Steam, build **2025.08.16** (`2025.08.16.178512.1`), with Halo: Reach installed. Linux
 also needs [umu-launcher](https://github.com/Open-Wine-Components/umu-launcher). The launcher updates itself from
-0.2.0 and 0.3.0.
+0.2.0 and 0.3.x.
 
 ## Downloads
 - `NobleOutreach-Launcher.exe` (Windows, unsigned: SmartScreen > More info > Run anyway) or
   `NobleOutreach-Launcher-linux` (`chmod +x`). The launcher installs and updates the game client.
-- `NobleOutreach-Server-v0.3.1.tar.gz`: dedicated server (`reach-host.exe --dedicated`) and a static `reach-master`.
+- `NobleOutreach-Server-v0.3.2.tar.gz`: dedicated server (`reach-host.exe --dedicated`) and a static `reach-master`.
 - `reach-host.exe` and `SHA256SUMS` are what the launcher downloads and checks.
 
 ## Main menu
@@ -51,6 +51,8 @@ also needs [umu-launcher](https://github.com/Open-Wine-Components/umu-launcher).
   "Default". Forge actions have clearer names (Monitor mode, Create objects, Object properties, ...).
 
 ## Fixes
+- 0.3.2: after leaving a game the mouse stayed hidden and locked, so the menu could not be clicked.
+- 0.3.2: the launcher has its own icon (Windows exe and window) instead of none.
 - The game could fail to start its graphics under Wine/Proton on the first try; it now retries.
 
 ## Known limits
