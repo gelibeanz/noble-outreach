@@ -128,3 +128,35 @@ view with HUD. What it needed:
   unscoped / 3x).
 - **Player names come from slot 88's name buffer** (see host-slots.md); ours writes `REACH_NAME` or "Player <n>".
 - Back-buffer captures by wall clock for screens before spawn: `REACH_CAPTURE_AT=14,16` → `at-014s.bmp` ….
+
+## Game after game in one process (2026-10-17, seamless.rs)
+
+The engine can be ended and started again in the same process: **unload and reload `haloreach.dll`**. A second
+`CreateGameEngine` on the still-loaded DLL was not tried (its globals are not all reset), there is no need.
+
+- **Built for it.** `GameThreadMain` (0x18000dc78) takes its own `LoadLibraryW` reference on the DLL and ends with
+  `FreeLibraryAndExitThread`, so the host may free the DLL while the thread finishes. `RunGameThreadBody`
+  (0x18000db08) reserves the 2 GB arena, runs the main loop (`FUN_180034818`), then `ShutdownGameSystems`,
+  `VirtualFree`s the arena and calls host slot 4 (signal_exit) with the recorded reason and message.
+- **Ending a game.** The main loop runs while the byte at 0x18263ea74 is 0. `RequestGameExit` (0x18000d648,
+  `void (int reason, const char* msg, …)`) stores the first reason/message (0x180c1a110 / 0x180c1a108), sets
+  0x182b0354f and 0x18263ea74 under an engine lock (0x180032bd8) and sends slot 3 state 10. Called from our window
+  thread it deadlocked once (client, during a vote follow: no further log, render stopped), so the host writes the
+  same four globals itself (`seamless::request_exit`). The game thread ends 1.0-2.2 s later (12 runs). Engine msg 13
+  (LEAVE GAME's quit) alone does not end the loop.
+- **Teardown order (main.rs `play_game`).** Exit flags → wait for the game thread (20 s limit, window messages
+  pumped) → engine vtable slot 0 (EngineDestroy) → `FreeLibrary` (one call unloads it: the thread's own reference
+  is gone) → next game: `LoadLibrary` again (same base under Wine), fresh `CreateDataAccess`/`CreateGameEngine`,
+  `initialize_graphics` with the **same** device/swap chain, `initialize_game`, msg 14. Engine threads left in the
+  module after the game thread ended: none (Toolhelp + `ThreadQuerySetWin32StartAddress` check before the unload).
+- **DestroyDataAccess (0x180069e94) is skipped** after a game: it first tears down a cached helper
+  (global 0x184e2fcb8) whose code asks `FUN_1800586c4` (scenario-valid check) and reads game-thread state that no
+  longer exists: access violation at haloreach+0x586e8, caught inside the engine. Leaving the object costs a few
+  hundred KB per game.
+- **Leaks.** The engine does not release all its D3D objects on our device: the device's reference count after
+  the unload grows 20-40 per game (74, 114, 131, 161, 184 over 5 campaign missions). Working set after the unload:
+  MP Slayer from the menu 874 → 886 → 899 MB (3 games, ~13 MB/game); campaign m05 → m30 716 → 1014 → 1191 → 1217
+  → 1322 MB. Past `REACH_SEAMLESS_MAX_MB` (default 3072) the next game starts in a fresh process.
+- Fallbacks to the old fresh-process path: `REACH_RELAUNCH=1`; thread not ended in 20 s; engine threads left;
+  DLL still loaded after `FreeLibrary`; working set over the limit. Dedicated servers still exit (code 3) and are
+  restarted by their supervisor (no window to keep).

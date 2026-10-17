@@ -66,6 +66,14 @@ fn close() {
     }
 }
 
+/// Between two games in one process (seamless.rs): overlay closed, no leave pending.
+pub fn reset() {
+    close();
+    *LEAVE_AT.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    OPENS.store(0, Ordering::Relaxed);
+    FRAMES.store(0, Ordering::Relaxed);
+}
+
 /// When the player chose LEAVE GAME (main loop then says bye to the peers and returns to the menu at once).
 pub fn leave_requested() -> Option<Instant> {
     *LEAVE_AT.lock().unwrap_or_else(|e| e.into_inner())

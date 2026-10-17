@@ -116,13 +116,14 @@ const ACTIONS: &[(&str, u32, &str, &str)] = &[
     ("Interface", 20, "Scoreboard", "Show the scores while held."),
     ("Forge", 25, "Raise object", "Forge: move the monitor or the held object up."),
     ("Forge", 26, "Lower object", "Forge: move the monitor or the held object down."),
-    ("Forge", 27, "Grab object", "Forge: pick up or drop the object you are looking at."),
-    ("Forge", 28, "Fast move", "Forge: move the monitor faster while held."),
+    ("Forge", 27, "Grab / drop object", "Forge: pick up or drop the object you are looking at."),
+    ("Forge", 28, "Move faster", "Forge: move the monitor faster while held."),
     ("Forge", 29, "Precision", "Forge: slow, precise movement and rotation while held."),
     ("Forge", 30, "Delete object", "Forge: delete the object you are looking at or holding."),
-    ("Forge", 31, "Object menu", "Forge: open the menu of objects you can place."),
-    ("Forge", 32, "Edit object", "Forge: open the properties of the object you are looking at."),
-    ("Forge", 33, "Switch to Spartan", "Forge: switch between the monitor and playing as a Spartan."),
+    ("Forge", 31, "Create objects", "Forge: open the menu of objects you can place."),
+    ("Forge", 32, "Object properties", "Forge: open the tools and properties of the object you are looking at."),
+    ("Forge", 33, "Monitor mode", "Forge: switch between the monitor and playing as a Spartan."),
+    ("Forge", 34, "Rotate held object", "Forge: hold to rotate the object you are carrying with the mouse."),
     ("Forge", 35, "Lock object", "Forge: hold an object still while you move around it."),
     ("Theater", 36, "Toggle panel", "Theater: show or hide the playback panel."),
     ("Theater", 37, "Toggle interface", "Theater: show or hide the HUD and interface."),
@@ -316,7 +317,12 @@ impl SettingsScreen {
         self.focus_help = None;
         self.row_i = 0;
         ui.scope_builder(egui::UiBuilder::new().max_rect(rows_r), |ui| {
-            egui::ScrollArea::vertical().id_salt(("settings-rows", self.cat as u8)).auto_shrink([false, false]).show(ui, |ui| {
+            let mut area = egui::ScrollArea::vertical().id_salt(("settings-rows", self.cat as u8)).auto_shrink([false, false]);
+            // REACH_UI_SCROLL=<pixels>: scroll the rows for unattended captures (REACH_UI_SHOT=settings-keyboard).
+            if let Some(y) = std::env::var("REACH_UI_SCROLL").ok().and_then(|v| v.parse::<f32>().ok()) {
+                area = area.vertical_scroll_offset(y);
+            }
+            area.show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 4.0;
                 match self.cat {
                     Cat::Graphics => self.graphics(ui),
@@ -663,8 +669,8 @@ impl SettingsScreen {
             let r = Rect::from_min_size(egui::pos2(ctrl.left() + slot as f32 * (w + gap), ctrl.top()), Vec2::new(w, ctrl.height()));
             let hit = ui.interact(r, resp.id.with(("slot", slot)), Sense::click());
             let listening = self.listen == Some((action, slot));
-            let code = keys[slot];
-            let clash: Vec<u32> = if code != 0 && !input::is_engine_default(code) {
+            let code = input::effective_keys(action as usize, keys)[slot];
+            let clash: Vec<u32> = if code != 0 {
                 clashes.iter().filter(|c| c.0 == code && c.1 != action && c.2 == context(group)).map(|c| c.1).collect()
             } else {
                 Vec::new()
@@ -676,8 +682,6 @@ impl SettingsScreen {
             p.rect_stroke(r, 2.0, Stroke::new(1.0, stroke), StrokeKind::Inside);
             let (text, col) = if listening {
                 ("Press a key ...".to_string(), ACCENT)
-            } else if input::is_engine_default(code) {
-                ("Default".to_string(), DIM)
             } else if !clash.is_empty() {
                 (input::key_name(code), Color32::from_rgb(255, 130, 110))
             } else {
@@ -764,6 +768,10 @@ impl SettingsScreen {
         if self.picker(ui, "Graphics quality", "Detail distance, lights, shadows, effects, water and texture filtering, like MCC's own preset. High draws full-detail objects much further away; Low is the old Xbox-like look and the fastest.", &levels, &mut qi, true) {
             g.quality = qi as u8;
         }
+        let mut lm = g.live_menu_scene;
+        if self.toggle(ui, "Live menu background", "Your Spartan, drawn live by the preview engine (the hidden copy of the game the Customize screen uses) behind the main menu, at 30 frames a second while it shows. Off shows still art from your install instead.", &mut lm) {
+            g.live_menu_scene = lm;
+        }
         self.s.graphics = g.clone();
     }
 
@@ -782,6 +790,10 @@ impl SettingsScreen {
         let mut v = a.sfx;
         if self.slider(ui, "Sound effects", "Weapons, vehicles, footsteps, voices and the rest, on top of the master volume.", &mut v, (0.0, 1.0, 0.05), &|v: f32| pct(v)) {
             a.sfx = v;
+        }
+        let mut v = a.menu_music;
+        if self.slider(ui, "Menu music", "The main menu's theme. 0 turns it off.", &mut v, (0.0, 1.0, 0.05), &|v: f32| pct(v)) {
+            a.menu_music = v;
         }
         self.s.audio = a.clone();
         self.section(ui, "Output");
@@ -852,7 +864,7 @@ impl SettingsScreen {
         let clashes: Vec<(u32, u32, u8)> = ACTIONS
             .iter()
             .flat_map(|a| {
-                let k = self.s.mouse.keys(a.1);
+                let k = input::effective_keys(a.1 as usize, self.s.mouse.keys(a.1));
                 [(k[0], a.1, context(a.0)), (k[1], a.1, context(a.0))]
             })
             .filter(|c| c.0 != 0)

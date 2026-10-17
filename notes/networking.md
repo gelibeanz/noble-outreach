@@ -213,6 +213,32 @@ a re-roll). Strings are u8 length + UTF-8.
 - The info query reply (above) carries the playlist name as an optional 5th string after the variant; decoders
   that stop after 4 strings are unaffected (no version bump).
 
+## Ping (scoreboard, 2026-10-17, `src/reach-host/src/ping.rs`)
+
+Per-player ping and the host's kill/death/assist counts for the Tab scoreboard (notes/frontend.md "Tab
+scoreboard"). Same side channel: raw datagrams on the game socket with magic `RPNG`, handed to `ping::handle` in
+net.rs's receive thread before the engine queues. All integers little-endian. Header (8 bytes): magic `RPNG`, u8
+version = 1, u8 kind, u8 entry count (table; 0 otherwise), u8 0.
+
+| Kind | Direction | Body after the header |
+|---|---|---|
+| 1 ping | host → every peer heard from in the last 4 s, once a second | u64 send time (µs, host clock), u64 0 |
+| 2 pong | client → host, at once | the ping's u64 time echoed, u64 the client's own net id |
+| 3 table | host → every peer, once a second (after the pings) | n × {u64 xuid, u16 ms (0xFFFF = none yet), i16 kills, i16 deaths, i16 assists (kills −32768 = no counts)} |
+
+- The host is instance 0 (listen or dedicated); clients answer pings and accept tables only from their host's
+  address; the host accepts pongs only from known peer addresses. RTT = now − echoed time, smoothed (0.7 old + 0.3
+  new). Max 16 entries (264 bytes).
+- **Peer → engine player:** instance n has net id `0x5245414348000001 + n` and plays as xuid `0x0009000000000001 + n`
+  (`options::xuid`, the xuid in its launch-options player entry and in the player datum +0x08). A joiner's random
+  identity (1..65535) keeps that rule, so the net id in a pong names the player's xuid without a lookup. A listen
+  host's own row is 0 ms; a dedicated server has no row.
+- Counts: the host's game results (frontend.md); without a player table yet (dedicated before the map), entries carry
+  only the ping. Clients use the table's counts while it is fresh (≤ 5 s), else their own.
+- Logs: host `ping: first pong from net id … (xuid …): x ms`, `ping: table …` (first 5, then whenever a count
+  changes); client `ping: table from the host: …` when counts change.
+- Older builds treat an `RPNG` datagram as an engine datagram from an unknown id (logged junk peer, harmless).
+
 ## NAT punch (2026-10-15, `src/reach-host/src/nat.rs`, master side `src/reach-master/src/rendezvous.rs`)
 
 Lets a friend's listen server (menu HOST, `--listen`) be joined without a port forward on routers with

@@ -280,6 +280,7 @@ fn resolve_public(addr: &str) -> Option<String> {
 
 /// Background thread: POST every 15 s. A failed beat is logged (first few) and retried.
 pub fn start_heartbeat(reg: Registration) {
+    let gen = crate::net::generation(); // the thread ends with our transport (seamless.rs)
     std::thread::spawn(move || {
         let mut info = reg.info;
         let public = info.addr.clone();
@@ -294,7 +295,7 @@ pub fn start_heartbeat(reg: Registration) {
         let mut cur = 0usize;
         let mut fails = 0u32;
         let mut last = u32::MAX;
-        loop {
+        while crate::net::generation() == gen {
             // A tunnel hostname (e.g. a playit UDP tunnel's name:port) is resolved on every beat, preferring IPv4,
             // since the master and clients take a numeric ip:port and the tunnel's IP can change.
             if let Some(a) = crate::nat::listing_addr().filter(|_| nat) {

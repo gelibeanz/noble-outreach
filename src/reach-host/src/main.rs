@@ -11,14 +11,17 @@ mod host;
 mod input;
 mod lobby;
 mod mission;
+mod music;
 mod log;
 mod nat;
 mod net;
 mod options;
+mod ping;
 mod preview;
 mod probe;
 mod query;
 mod playlist;
+mod seamless;
 mod vote;
 mod profile;
 mod text;
@@ -447,7 +450,7 @@ fn run() -> Result<(), String> {
     let mut args = parse_args(&argv)?;
     log!("mcc dir: {}", args.mcc.display());
     // No launch arguments: show the main menu first (ui/menu.rs); it hands back the arguments of the chosen game.
-    let menu = args.options.is_none() && !args.build.wanted() && args.net.is_none() && !args.no_launch && !args.hidden && !args.dedicated();
+    let mut menu = args.options.is_none() && !args.build.wanted() && args.net.is_none() && !args.no_launch && !args.hidden && !args.dedicated();
     // REACH_FROM_MENU: a game started from the menu, also after mission.rs relaunched it into the next mission (it
     // returns to the menu at the end like the first one).
     let mut from_menu = std::env::var_os("REACH_FROM_MENU").is_some();
@@ -461,6 +464,8 @@ fn run() -> Result<(), String> {
             std::env::set_var("REACH_MASTER", m); // browser::master_list; inherited by a relaunched menu
         }
     }
+    // What the menu starts from when a game returns to it in this process (as `relaunch_to_menu` would start it).
+    let menu_argv = vec!["--mcc".to_string(), args.mcc.to_string_lossy().into_owned()];
     unsafe {
         crash::install();
         log!("vectored exception handler installed");
@@ -474,9 +479,22 @@ fn run() -> Result<(), String> {
 
         // REACH_UI_HIDDEN: unattended checks keep a relaunched menu hidden too.
         let hwnd = create_window(args.hidden || std::env::var_os("REACH_UI_HIDDEN").is_some(), args.size).map_err(|e| format!("create window: {e}"))?;
-        log!("window created {hwnd:?}{}", if args.hidden { " (hidden)" } else { "" });
+        log!("window created {hwnd:?}{} in process {}", if args.hidden { " (hidden)" } else { "" }, std::process::id());
         input::init(hwnd);
-        let gfx = create_gfx(hwnd, args.size, args.warp).map_err(|e| format!("d3d11/swap chain: {e}"))?;
+        // Under Wine/DXVK the swap chain sometimes fails at start (E_FAIL) and works on the next try, more often when
+        // two of our processes start at once (menu + preview engine).
+        let mut tries = 0;
+        let gfx = loop {
+            match create_gfx(hwnd, args.size, args.warp) {
+                Ok(g) => break g,
+                Err(e) if tries < 4 => {
+                    tries += 1;
+                    log!("d3d11/swap chain: {e}; retry {tries}");
+                    std::thread::sleep(std::time::Duration::from_millis(300 * tries));
+                }
+                Err(e) => return Err(format!("d3d11/swap chain: {e}")),
+            }
+        };
         host::WINDOW.store(hwnd.0 as usize, std::sync::atomic::Ordering::Relaxed);
         host::SWAPCHAIN.store(gfx.swapchain.as_raw() as usize, std::sync::atomic::Ordering::Relaxed);
         log!(
@@ -485,42 +503,7 @@ fn run() -> Result<(), String> {
             gfx.context.as_raw(),
             gfx.swapchain.as_raw()
         );
-        if menu {
-            let _ = preview::MCC.set(args.mcc.clone());
-            let choice = ui::menu::run(hwnd, &gfx.swapchain, &gfx.context, &args.mcc);
-            preview::stop(); // the menu's preview engine is not needed in game
-            match choice {
-                ui::menu::Choice::Quit => {
-                    log!("menu: quit");
-                    return Ok(());
-                }
-                ui::menu::Choice::Launch(extra) => {
-                    argv.extend(extra);
-                    args = parse_args(&argv)?;
-                    let _ = vote::LAUNCH_ARGS.set(argv.clone()); // a vote restart relaunches with the menu's flags
-                    from_menu = true;
-                    std::env::set_var("REACH_FROM_MENU", "1");
-                    if std::env::var_os("REACH_NAME").is_none() {
-                        std::env::set_var("REACH_NAME", &ui::settings::get().player_name); // read by slot 88
-                    }
-                }
-            }
-        }
 
-        // Solo or hosted campaign from the menu: roll on into the next mission when this one ends (mission.rs).
-        if from_menu && !args.dedicated() && matches!(args.build.mode, options::Mode::Campaign { .. }) && args.net.as_ref().is_none_or(|n| n.instance == 0) {
-            if let Some(map) = &args.build.map {
-                let difficulty = ["easy", "normal", "heroic", "legendary"][args.build.difficulty.clamp(0, 3) as usize];
-                let _ = mission::CURRENT.set((map.clone(), difficulty.into(), args.mcc.clone()));
-            }
-        }
-
-        // Client: wake a dormant dedicated server now, so its engine loads while ours does (dormant.rs).
-        // REACH_NO_WAKE=1: behave like an older client (no wake, no wait), to check the engine's own join retry.
-        let join_host = args.net.as_ref().filter(|n| n.instance != 0 && std::env::var_os("REACH_NO_WAKE").is_none()).and_then(|n| n.peers.iter().find(|p| p.0 == net::net_id(0)).map(|p| p.1));
-        if let Some(h) = join_host {
-            dormant::send_wake(h);
-        }
         // The engine resolves `haloreach\maps\...` relative to the MCC folder.
         let dll_dir = args.mcc.join("haloreach");
         SetDllDirectoryW(PCWSTR(wide(&dll_dir.to_string_lossy()).as_ptr())).map_err(|e| format!("SetDllDirectory: {e}"))?;
@@ -537,244 +520,416 @@ fn run() -> Result<(), String> {
         if !preview::is_child() {
             audio::preload(&args.mcc); // the preview child stays silent (no XAudio2 = no game audio)
         }
-        let dll_path = dll_dir.join("haloreach.dll");
-        let module = LoadLibraryW(PCWSTR(wide(&dll_path.to_string_lossy()).as_ptr()))
-            .map_err(|e| format!("LoadLibrary {}: {e}", dll_path.display()))?;
-        let base = module.0 as usize;
-        crash::ENGINE_BASE.store(base, std::sync::atomic::Ordering::Relaxed);
-        net::ENGINE_BASE.store(base, std::sync::atomic::Ordering::Relaxed);
-        probe::arm(base, &args.probes);
-        audio::watch(base);
-        input::install_cursor_hooks(base); // engine menus (loadout picker) read the OS cursor
-        if args.no_render {
-            // The render thread's frame function (0x1800c2dfc) only begins, draws and presents a frame while this
-            // byte is 0; nothing in the engine writes it. The loading screen still draws through its own path.
-            // Costs more CPU, not less: the engine's render thread then spins at 100 % of a core (nothing paces it).
-            *((base + 0x263ea75) as *mut u8) = 1;
-            log!("--no-render: engine render-skip byte haloreach+0x263ea75 set");
-        }
-        if args.dedicated() {
-            throttle::install(base); // game thread has no frame limiter (notes/dedicated.md)
-            lobby::install_jip(base);
-        } else if args.net.as_ref().is_some_and(|n| n.instance == 0) {
-            throttle::install_tick_only(base); // game-thread tick that drops peers saying bye (net.rs)
-        }
-        log!("loaded {} at {base:#x}", dll_path.display());
-        let get = |name: &'static [u8]| -> Result<usize, String> {
-            GetProcAddress(module, PCSTR(name.as_ptr()))
-                .map(|f| f as usize)
-                .ok_or_else(|| format!("missing export {}", String::from_utf8_lossy(&name[..name.len() - 1])))
-        };
-        let set_settings: SetSettingsFn = transmute(get(b"SetLibrarySettings\0")?);
-        let create_data: CreateFn = transmute(get(b"CreateDataAccess\0")?);
-        let create_engine: CreateFn = transmute(get(b"CreateGameEngine\0")?);
-        log!("exports resolved (SLS +{:#x}, CDA +{:#x}, CGE +{:#x})",
-            set_settings as usize - base, create_data as usize - base, create_engine as usize - base);
 
-        let mut settings = [0u16; 3 * 85];
-        for i in 0..3 {
-            for (j, c) in "en-US".encode_utf16().enumerate() {
-                settings[i * 85 + j] = c;
-            }
-        }
-        set_settings(settings.as_ptr());
-        log!("SetLibrarySettings(en-US x3) returned");
-
-        let mut data: *mut c_void = std::ptr::null_mut();
-        let rc = create_data(&mut data);
-        log!("CreateDataAccess -> {rc:#x}, object {data:?}");
-        let mut engine: *mut c_void = std::ptr::null_mut();
-        let rc = create_engine(&mut engine);
-        log!("CreateGameEngine -> {rc:#x}, object {engine:?}");
-        if engine.is_null() {
-            return Err("no engine object".into());
-        }
-        let vt = *(engine as *const *const usize);
-        log!("engine vtable {vt:?}, slots 1 = haloreach+{:#x}, 2 = haloreach+{:#x}",
-            *vt.add(1) - base, *vt.add(2) - base);
-
-        preview::ENGINE.store(engine as usize, std::sync::atomic::Ordering::Relaxed);
-        preview::COMMAND.store(*vt.add(9), std::sync::atomic::Ordering::Relaxed);
-        let init_gfx: InitGfxFn = transmute(*vt.add(1));
-        let r = init_gfx(engine, gfx.device.as_raw(), gfx.context.as_raw(), gfx.swapchain.as_raw(), std::ptr::null_mut());
-        log!("initialize_graphics returned {r:#x}");
-
-        if args.no_launch {
-            log!("--no-launch: stopping after engine creation");
-            return Ok(());
-        }
-
-        let options: Vec<u8> = match &args.options {
-            None if args.build.wanted() => {
-                let b = options::build(&args.build, &args.mcc, data, base)?;
-                let out = exe_dir().join("built-options.bin");
-                match std::fs::write(&out, &b) {
-                    Ok(()) => log!("built options written to {}", out.display()),
-                    Err(e) => log!("could not write {}: {e}", out.display()),
-                }
-                b
-            }
-            Some(p) => {
-                let b = std::fs::read(p).map_err(|e| format!("read {}: {e}", p.display()))?;
-                if b.len() != GAME_OPTIONS_SIZE {
-                    return Err(format!("{} is {:#x} bytes, expected {GAME_OPTIONS_SIZE:#x}", p.display(), b.len()));
-                }
-                log!("launch options from {}", p.display());
-                b
-            }
-            None => {
-                // PLACEHOLDER: not a real launch. Zeroed block, game_mode = 3 (+0x0C), flags bit 3 (multiplayer).
-                let mut b = vec![0u8; GAME_OPTIONS_SIZE];
-                b[0] |= 0x08;
-                b[0x0C..0x10].copy_from_slice(&3u32.to_le_bytes());
-                log!("PLACEHOLDER launch options (zeroed, game_mode=3, flags bit 3): expect the engine to fail");
-                b
-            }
-        };
-
-        start_networking(&args)?; // already up on a lazy dedicated server (dormant.rs)
-        if args.dedicated() || host::LISTEN.load(std::sync::atomic::Ordering::Relaxed) {
-            let _ = host::NEXT_GAME_OPTIONS.set(options.clone());
-        }
-        if let Some(h) = join_host {
-            dormant::wait_for_host(h, std::time::Duration::from_secs(90)); // a woken server needs a few s to reach state 8
-        }
-        let host = host::build_host();
-        log!("host object {host:?}, vtable {:?}", (*host).vtable);
-        let init_game: InitGameFn = transmute(*vt.add(2));
-        let thread = init_game(engine, host as *mut c_void, options.as_ptr());
-        log!("initialize_game returned thread handle {thread:?}");
-
-        // Render targets are only built after a resize message; MCC sends one once the game runs.
-        let post: PostMessageFn = transmute(*vt.add(3));
-        post(engine, ENGINE_MSG_RESIZE, std::ptr::null());
-        ui::overlay::ENGINE.store(engine as usize, std::sync::atomic::Ordering::Relaxed);
-        ui::overlay::POST.store(*vt.add(3), std::sync::atomic::Ordering::Relaxed);
-        log!("posted engine message {ENGINE_MSG_RESIZE} (resize)");
-
-        let mut exited = thread.is_invalid();
-        if std::env::var_os("REACH_SAMPLE").is_some() && !exited {
-            sample_game_thread(thread.0 as usize, base); // debug aid: where does the game thread spend its time
-        }
-        let mut cpu = CpuLog::new();
-        let mut msg = MSG::default();
-        let join_t0 = std::time::Instant::now();
+        // Game after game in this window (seamless.rs): each pass plays one game (after the menu, if shown).
         loop {
-            while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
-                if msg.message == WM_QUIT {
-                    log!("window closed");
-                    net::send_bye(); // peers drop us now, not after the engine's ~16 s timeout
-                    ui::hard_exit(0); // a wedged engine thread must not keep the process alive
-                }
-                let _ = TranslateMessage(&msg);
-                DispatchMessageW(&msg);
-            }
-            if !exited && WaitForSingleObject(thread, 0) == WAIT_OBJECT_0 {
-                let mut code = 0u32;
-                let _ = windows::Win32::System::Threading::GetExitCodeThread(thread, &mut code);
-                log!("game thread exited, code {code:#x}");
-                exited = true;
-                if preview::is_child() {
-                    std::process::exit(4); // preview scene over (Slayer time limit): the menu starts a fresh one
-                }
-                if args.dedicated() {
-                    // Once the last player has left, the engine cannot start another game with nobody in it: its
-                    // life cycle falls back to the main menu, which a hosted engine turns into an exit. The engine
-                    // cannot be restarted in-process, so the server process exits and its supervisor (run script
-                    // loop, docker restart policy) starts a fresh one that waits for the next first player.
-                    log!("dedicated: engine stopped; exiting with code 3 so the supervisor restarts the server");
-                    std::process::exit(3);
-                }
-                if let Some(next) = mission::relaunch_args(&argv) {
-                    // Mission over: the next one in a fresh process (mission.rs), once this one has freed its port.
-                    let exe = std::env::current_exe().unwrap_or_default();
-                    let _ = std::fs::copy(exe.with_file_name("reach-host.log"), exe.with_file_name("reach-host-game.log"));
-                    match std::process::Command::new(&exe).args(&next).env("REACH_VOTE_PREV_PID", std::process::id().to_string()).spawn() {
-                        Ok(c) => {
-                            log!("mission: next mission in process {} with {}", c.id(), next.join(" "));
-                            ui::hard_exit(0);
+            if menu {
+                let _ = preview::MCC.set(args.mcc.clone());
+                music::start(&args.mcc); // menu theme from the player's install; fades out below
+                let choice = ui::menu::run(hwnd, &gfx.swapchain, &gfx.context, &args.mcc);
+                music::stop();
+                preview::stop(); // the menu's preview engine is not needed in game
+                match choice {
+                    ui::menu::Choice::Quit => {
+                        log!("menu: quit");
+                        return Ok(());
+                    }
+                    ui::menu::Choice::Launch(extra) => {
+                        argv.extend(extra);
+                        args = parse_args(&argv)?;
+                        let _ = vote::LAUNCH_ARGS.set(argv.clone()); // a vote restart relaunches with the menu's flags
+                        from_menu = true;
+                        std::env::set_var("REACH_FROM_MENU", "1");
+                        if std::env::var_os("REACH_NAME").is_none() {
+                            std::env::set_var("REACH_NAME", &ui::settings::get().player_name); // read by slot 88
                         }
-                        Err(e) => log!("mission: could not start the next mission: {e}"),
                     }
                 }
-                if (from_menu || ui::overlay::leave_requested().is_some()) && !vote::following() {
-                    ui::relaunch_to_menu(&args.mcc);
+            }
+            seamless::set_argv(&argv);
+            let n = seamless::GAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            log!("seamless: game {n} in process {} window {hwnd:?}: {}; {}", std::process::id(), argv.join(" "), seamless::mem_line());
+            let next = play_game(&args, &argv, from_menu, &gfx, &dll_dir)?;
+            log!("seamless: game {n} over, next {next:?}; {}", seamless::mem_line());
+            reset_game_state();
+            match next {
+                seamless::Next::Menu(notice) => {
+                    stop_networking(); // the menu hosts nothing; the next game binds afresh
+                    match &notice {
+                        Some(n) => std::env::set_var("REACH_UI_NOTICE", n),
+                        None => std::env::remove_var("REACH_UI_NOTICE"),
+                    }
+                    // Unattended checks: REACH_SEAMLESS_GAMES=n replays the REACH_UI_SHOT steps for n games, then
+                    // the menu takes its "back from a game" capture and quits.
+                    let want = std::env::var("REACH_SEAMLESS_GAMES").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(1);
+                    if n >= want {
+                        std::env::set_var("REACH_UI_RELAUNCHED", "1");
+                    }
+                    std::env::remove_var("REACH_FROM_MENU");
+                    argv = menu_argv.clone();
+                    args = parse_args(&argv)?;
+                    from_menu = false;
+                    menu = true;
+                }
+                seamless::Next::Game(a) => {
+                    argv = a;
+                    args = parse_args(&argv)?;
+                    menu = false;
                 }
             }
-            // LEAVE GAME: say bye (the host drops us at once; a listen host's joiners go back to their menus), then
-            // return to the menu in a fresh process. Msg 13 does not reliably end the game thread, and the engine
-            // cannot be restarted in-process anyway, so there is nothing to wait for.
-            if ui::overlay::leave_requested().is_some() {
-                net::send_bye();
-                log!("leave game: returning to the menu");
-                ui::relaunch_to_menu(&args.mcc);
+        }
+    }
+}
+
+/// Per-game state of our modules, cleared between two games in one process.
+fn reset_game_state() {
+    ui::overlay::reset();
+    input::reset_game();
+    ui::scoreboard::reset();
+    mission::reset();
+    lobby::reset();
+    net::reset_game();
+    vote::end_follow();
+    *host::NEXT_GAME_OPTIONS.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    host::DEDICATED.store(false, std::sync::atomic::Ordering::Relaxed);
+    host::LISTEN.store(false, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Load the engine, play one game in our window, shut the engine down and unload it. Returns what comes next.
+/// Paths that cannot (yet) continue in this process relaunch it as before and do not return.
+unsafe fn play_game(args: &Args, argv: &[String], from_menu: bool, gfx: &Gfx, dll_dir: &std::path::Path) -> Result<seamless::Next, String> {
+    // Solo or hosted campaign from the menu: roll on into the next mission when this one ends (mission.rs).
+    if from_menu && !args.dedicated() && matches!(args.build.mode, options::Mode::Campaign { .. }) && args.net.as_ref().is_none_or(|n| n.instance == 0) {
+        if let Some(map) = &args.build.map {
+            let difficulty = ["easy", "normal", "heroic", "legendary"][args.build.difficulty.clamp(0, 3) as usize];
+            mission::set_current((map.clone(), difficulty.into(), args.mcc.clone()));
+        }
+    }
+
+    // Client: wake a dormant dedicated server now, so its engine loads while ours does (dormant.rs).
+    // REACH_NO_WAKE=1: behave like an older client (no wake, no wait), to check the engine's own join retry.
+    let join_host = args.net.as_ref().filter(|n| n.instance != 0 && std::env::var_os("REACH_NO_WAKE").is_none()).and_then(|n| n.peers.iter().find(|p| p.0 == net::net_id(0)).map(|p| p.1));
+    if let Some(h) = join_host {
+        dormant::send_wake(h);
+    }
+    let dll_path = dll_dir.join("haloreach.dll");
+    let module = LoadLibraryW(PCWSTR(wide(&dll_path.to_string_lossy()).as_ptr()))
+        .map_err(|e| format!("LoadLibrary {}: {e}", dll_path.display()))?;
+    let base = module.0 as usize;
+    crash::ENGINE_BASE.store(base, std::sync::atomic::Ordering::Relaxed);
+    net::ENGINE_BASE.store(base, std::sync::atomic::Ordering::Relaxed);
+    probe::arm(base, &args.probes);
+    audio::watch(base);
+    input::install_cursor_hooks(base); // engine menus (loadout picker) read the OS cursor
+    if args.no_render {
+        // The render thread's frame function (0x1800c2dfc) only begins, draws and presents a frame while this
+        // byte is 0; nothing in the engine writes it. The loading screen still draws through its own path.
+        // Costs more CPU, not less: the engine's render thread then spins at 100 % of a core (nothing paces it).
+        *((base + 0x263ea75) as *mut u8) = 1;
+        log!("--no-render: engine render-skip byte haloreach+0x263ea75 set");
+    }
+    if args.dedicated() {
+        throttle::install(base); // game thread has no frame limiter (notes/dedicated.md)
+        lobby::install_jip(base);
+    } else if args.net.as_ref().is_some_and(|n| n.instance == 0) {
+        throttle::install_tick_only(base); // game-thread tick that drops peers saying bye (net.rs)
+    }
+    log!("loaded {} at {base:#x}", dll_path.display());
+    let get = |name: &'static [u8]| -> Result<usize, String> {
+        GetProcAddress(module, PCSTR(name.as_ptr()))
+            .map(|f| f as usize)
+            .ok_or_else(|| format!("missing export {}", String::from_utf8_lossy(&name[..name.len() - 1])))
+    };
+    let set_settings: SetSettingsFn = transmute(get(b"SetLibrarySettings\0")?);
+    let create_data: CreateFn = transmute(get(b"CreateDataAccess\0")?);
+    let create_engine: CreateFn = transmute(get(b"CreateGameEngine\0")?);
+    log!("exports resolved (SLS +{:#x}, CDA +{:#x}, CGE +{:#x})",
+        set_settings as usize - base, create_data as usize - base, create_engine as usize - base);
+
+    let mut settings = [0u16; 3 * 85];
+    for i in 0..3 {
+        for (j, c) in "en-US".encode_utf16().enumerate() {
+            settings[i * 85 + j] = c;
+        }
+    }
+    set_settings(settings.as_ptr());
+    log!("SetLibrarySettings(en-US x3) returned");
+
+    let mut data: *mut c_void = std::ptr::null_mut();
+    let rc = create_data(&mut data);
+    log!("CreateDataAccess -> {rc:#x}, object {data:?}");
+    let mut engine: *mut c_void = std::ptr::null_mut();
+    let rc = create_engine(&mut engine);
+    log!("CreateGameEngine -> {rc:#x}, object {engine:?}");
+    if engine.is_null() {
+        return Err("no engine object".into());
+    }
+    let vt = *(engine as *const *const usize);
+    log!("engine vtable {vt:?}, slots 1 = haloreach+{:#x}, 2 = haloreach+{:#x}",
+        *vt.add(1) - base, *vt.add(2) - base);
+
+    preview::ENGINE.store(engine as usize, std::sync::atomic::Ordering::Relaxed);
+    preview::COMMAND.store(*vt.add(9), std::sync::atomic::Ordering::Relaxed);
+    let init_gfx: InitGfxFn = transmute(*vt.add(1));
+    let r = init_gfx(engine, gfx.device.as_raw(), gfx.context.as_raw(), gfx.swapchain.as_raw(), std::ptr::null_mut());
+    log!("initialize_graphics returned {r:#x}");
+
+    if args.no_launch {
+        log!("--no-launch: stopping after engine creation");
+        std::process::exit(0);
+    }
+
+    let options: Vec<u8> = match &args.options {
+        None if args.build.wanted() => {
+            let b = options::build(&args.build, &args.mcc, data, base)?;
+            let out = exe_dir().join("built-options.bin");
+            match std::fs::write(&out, &b) {
+                Ok(()) => log!("built options written to {}", out.display()),
+                Err(e) => log!("could not write {}: {e}", out.display()),
             }
-            // Joiner that never heard from the host (unreachable address, carrier-grade NAT, firewall): back to the
-            // menu with a reason instead of a black screen forever.
-            if args.net.as_ref().is_some_and(|n| n.instance != 0) && !net::host_heard() && join_t0.elapsed().as_secs() >= 20 && !vote::following() {
-                log!("join: no answer from the host in 20 s; returning to the menu");
-                net::send_bye();
-                ui::relaunch_to_menu_with(&args.mcc, Some("Could not reach the host. If they host from home behind carrier-grade NAT (CGNAT), nobody can reach them: let another player host, or play on a server."));
+            b
+        }
+        Some(p) => {
+            let b = std::fs::read(p).map_err(|e| format!("read {}: {e}", p.display()))?;
+            if b.len() != GAME_OPTIONS_SIZE {
+                return Err(format!("{} is {:#x} bytes, expected {GAME_OPTIONS_SIZE:#x}", p.display(), b.len()));
             }
-            if net::HOST_LEFT.load(std::sync::atomic::Ordering::Relaxed) && !vote::following() {
-                log!("host left the game: returning to the menu");
-                ui::relaunch_to_menu_with(&args.mcc, Some("The host left the game."));
+            log!("launch options from {}", p.display());
+            b
+        }
+        None => {
+            // PLACEHOLDER: not a real launch. Zeroed block, game_mode = 3 (+0x0C), flags bit 3 (multiplayer).
+            let mut b = vec![0u8; GAME_OPTIONS_SIZE];
+            b[0] |= 0x08;
+            b[0x0C..0x10].copy_from_slice(&3u32.to_le_bytes());
+            log!("PLACEHOLDER launch options (zeroed, game_mode=3, flags bit 3): expect the engine to fail");
+            b
+        }
+    };
+
+    start_networking(args)?; // already up on a lazy dedicated server (dormant.rs), or kept from the last game
+    if args.dedicated() || host::LISTEN.load(std::sync::atomic::Ordering::Relaxed) {
+        *host::NEXT_GAME_OPTIONS.lock().unwrap_or_else(|e| e.into_inner()) = Some(options.clone());
+    }
+    if let Some(h) = join_host {
+        dormant::wait_for_host(h, std::time::Duration::from_secs(90)); // a woken server needs a few s to reach state 8
+    }
+    let host = host::build_host();
+    log!("host object {host:?}, vtable {:?}", (*host).vtable);
+    let init_game: InitGameFn = transmute(*vt.add(2));
+    let thread = init_game(engine, host as *mut c_void, options.as_ptr());
+    log!("initialize_game returned thread handle {thread:?}");
+
+    // Render targets are only built after a resize message; MCC sends one once the game runs.
+    let post: PostMessageFn = transmute(*vt.add(3));
+    post(engine, ENGINE_MSG_RESIZE, std::ptr::null());
+    ui::overlay::ENGINE.store(engine as usize, std::sync::atomic::Ordering::Relaxed);
+    ui::overlay::POST.store(*vt.add(3), std::sync::atomic::Ordering::Relaxed);
+    log!("posted engine message {ENGINE_MSG_RESIZE} (resize)");
+
+    let seamless = seamless::enabled() && !args.dedicated() && !preview::is_child();
+    let mut exited = thread.is_invalid();
+    if std::env::var_os("REACH_SAMPLE").is_some() && !exited {
+        sample_game_thread(thread.0 as usize, base); // debug aid: where does the game thread spend its time
+    }
+    let mut cpu = CpuLog::new();
+    let mut msg = MSG::default();
+    let join_t0 = std::time::Instant::now();
+    let next = loop {
+        while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+            if msg.message == WM_QUIT {
+                log!("window closed");
+                net::send_bye(); // peers drop us now, not after the engine's ~16 s timeout
+                ui::hard_exit(0); // a wedged engine thread must not keep the process alive
             }
-            cpu.tick();
-            if lobby::LISTEN.load(std::sync::atomic::Ordering::Relaxed) {
-                hold_launch_for_first_player(base, args.net.as_ref().map_or(0, |n| n.players)); // state-8 timers
+            let _ = TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+        if !exited && WaitForSingleObject(thread, 0) == WAIT_OBJECT_0 {
+            let mut code = 0u32;
+            let _ = windows::Win32::System::Threading::GetExitCodeThread(thread, &mut code);
+            log!("game thread exited, code {code:#x}");
+            exited = true;
+            if preview::is_child() {
+                std::process::exit(4); // preview scene over (Slayer time limit): the menu starts a fresh one
             }
             if args.dedicated() {
-                hold_launch_for_first_player(base, args.net.as_ref().map_or(0, |n| n.players));
-                let launch = ((base + 0xc1a114) as *const u32).read_volatile();
-                dormant::tick(launch);
-                // Woken (by a stray packet, or a client that gave up) but nobody came: back to dormant via the supervisor.
-                if launch == 8 && dormant::since_wake().is_some_and(|t| t.as_secs() >= 120) && net::active_peer_addrs(std::time::Duration::from_secs(15)).is_empty() {
-                    log!("dormant: nobody joined within 120 s of the wake; exiting with code 3 so the supervisor restarts the server dormant");
-                    std::process::exit(3);
-                }
-                vote::tick(); // playlist vote (no-op without --playlist)
-                keep_session_without_local_users(base);
+                // Once the last player has left, the engine cannot start another game with nobody in it: its
+                // life cycle falls back to the main menu, which a hosted engine turns into an exit. The server
+                // process exits and its supervisor (run script loop, docker restart policy) starts a fresh one that
+                // waits for the next first player (a server has no window to keep).
+                log!("dedicated: engine stopped; exiting with code 3 so the supervisor restarts the server");
+                std::process::exit(3);
             }
-            std::thread::sleep(std::time::Duration::from_millis(10));
+            if let Some(next) = mission::relaunch_args(argv) {
+                // Mission over: the next one in this window (or a fresh process with REACH_RELAUNCH=1, mission.rs).
+                if seamless {
+                    log!("mission: next mission in this process with {}", next.join(" "));
+                    break seamless::Next::Game(next);
+                }
+                let exe = std::env::current_exe().unwrap_or_default();
+                let _ = std::fs::copy(exe.with_file_name("reach-host.log"), exe.with_file_name("reach-host-game.log"));
+                match std::process::Command::new(&exe).args(&next).env("REACH_VOTE_PREV_PID", std::process::id().to_string()).spawn() {
+                    Ok(c) => {
+                        log!("mission: next mission in process {} with {}", c.id(), next.join(" "));
+                        ui::hard_exit(0);
+                    }
+                    Err(e) => log!("mission: could not start the next mission: {e}"),
+                }
+            }
+            if let Some(n) = seamless::take_next() {
+                break n; // a vote follow decided while the thread was ending
+            }
+            if (from_menu || ui::overlay::leave_requested().is_some()) && !vote::following() {
+                if seamless {
+                    break seamless::Next::Menu(None);
+                }
+                ui::relaunch_to_menu(&args.mcc);
+            }
+        }
+        // A vote follow (vote.rs) or a mission chain decided the next game while this one still runs.
+        if seamless && seamless::next_pending() {
+            break seamless::take_next().unwrap();
+        }
+        // LEAVE GAME: say bye (the host drops us at once; a listen host's joiners go back to their menus), then
+        // return to the menu: in this window (the engine is shut down below), or in a fresh process (REACH_RELAUNCH=1).
+        if ui::overlay::leave_requested().is_some() {
+            net::send_bye();
+            log!("leave game: returning to the menu");
+            if seamless {
+                break seamless::Next::Menu(None);
+            }
+            ui::relaunch_to_menu(&args.mcc);
+        }
+        // Joiner that never heard from the host (unreachable address, carrier-grade NAT, firewall): back to the
+        // menu with a reason instead of a black screen forever.
+        if args.net.as_ref().is_some_and(|n| n.instance != 0) && !net::host_heard() && join_t0.elapsed().as_secs() >= 20 && !vote::following() {
+            log!("join: no answer from the host in 20 s; returning to the menu");
+            net::send_bye();
+            let why = "Could not reach the host. If they host from home behind carrier-grade NAT (CGNAT), nobody can reach them: let another player host, or play on a server.";
+            if seamless {
+                break seamless::Next::Menu(Some(why.into()));
+            }
+            ui::relaunch_to_menu_with(&args.mcc, Some(why));
+        }
+        if net::HOST_LEFT.load(std::sync::atomic::Ordering::Relaxed) && !vote::following() {
+            log!("host left the game: returning to the menu");
+            if seamless {
+                break seamless::Next::Menu(Some("The host left the game.".into()));
+            }
+            ui::relaunch_to_menu_with(&args.mcc, Some("The host left the game."));
+        }
+        cpu.tick();
+        if lobby::LISTEN.load(std::sync::atomic::Ordering::Relaxed) {
+            hold_launch_for_first_player(base, args.net.as_ref().map_or(0, |n| n.players)); // state-8 timers
+        }
+        if args.dedicated() {
+            hold_launch_for_first_player(base, args.net.as_ref().map_or(0, |n| n.players));
+            let launch = ((base + 0xc1a114) as *const u32).read_volatile();
+            dormant::tick(launch);
+            // Woken (by a stray packet, or a client that gave up) but nobody came: back to dormant via the supervisor.
+            if launch == 8 && dormant::since_wake().is_some_and(|t| t.as_secs() >= 120) && net::active_peer_addrs(std::time::Duration::from_secs(15)).is_empty() {
+                log!("dormant: nobody joined within 120 s of the wake; exiting with code 3 so the supervisor restarts the server dormant");
+                std::process::exit(3);
+            }
+            vote::tick(); // playlist vote (no-op without --playlist)
+            keep_session_without_local_users(base);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
+
+    // End the engine in place: ask the game loop to stop, wait for the game thread, destroy the engine objects and
+    // unload the DLL. If the thread does not end, fall back to a fresh process (the old way).
+    if !exited {
+        seamless::request_exit(base, b"host: game over\0");
+        if !seamless::wait_thread(thread, std::time::Duration::from_secs(20)) {
+            return Ok(relaunch_fallback(args, next));
+        }
+    }
+    match &next {
+        seamless::Next::Game(a) => ui::loading::show(&gfx.swapchain, &gfx.context, "Loading", ui::loading::map_of(a).as_deref(), &args.mcc),
+        seamless::Next::Menu(_) => ui::loading::show(&gfx.swapchain, &gfx.context, "Leaving the game", None, &args.mcc),
+    }
+    let _ = windows::Win32::Foundation::CloseHandle(thread);
+    ui::overlay::ENGINE.store(0, std::sync::atomic::Ordering::Relaxed);
+    ui::overlay::POST.store(0, std::sync::atomic::Ordering::Relaxed);
+    preview::ENGINE.store(0, std::sync::atomic::Ordering::Relaxed);
+    let destroy: unsafe extern "system" fn(*mut c_void) = transmute(*vt);
+    destroy(engine);
+    // The data-access object is left alone: its destructor first frees a cached helper whose teardown asks whether
+    // the game's scenario is still valid, reading game-thread state that is gone (access violation at
+    // haloreach+0x586e8, caught inside the engine). A few hundred KB per game; the DLL unload drops the rest.
+    let _ = data;
+    let size = seamless::image_size(base);
+    let left = seamless::engine_threads(base, size);
+    if !left.is_empty() {
+        log!("seamless: {} engine thread(s) still running ({}); the DLL stays loaded",
+            left.len(), left.iter().map(|(t, s)| format!("tid {t} start +{s:#x}")).collect::<Vec<_>>().join(", "));
+        return Ok(relaunch_fallback(args, next));
+    }
+    crash::ENGINE_BASE.store(0, std::sync::atomic::Ordering::Relaxed);
+    net::ENGINE_BASE.store(0, std::sync::atomic::Ordering::Relaxed);
+    if !seamless::unload(module, &dll_path) {
+        return Ok(relaunch_fallback(args, next));
+    }
+    // Leak check: references the engine still holds on our device (its textures and buffers keep one each).
+    let refs = {
+        let raw = Interface::as_raw(&gfx.device);
+        let vt = Interface::vtable(&gfx.device);
+        let n = (vt.base__.AddRef)(raw);
+        (vt.base__.Release)(raw);
+        n - 1
+    };
+    log!("seamless: engine unloaded; D3D device references {refs}; {}", seamless::mem_line());
+    if seamless::over_memory_limit() {
+        log!("seamless: working set over the limit (engine leaks): next game in a fresh process");
+        return Ok(relaunch_fallback(args, next));
+    }
+    Ok(next)
+}
+
+/// The engine could not be ended in place: carry on in a fresh process, as before seamless games.
+fn relaunch_fallback(args: &Args, next: seamless::Next) -> seamless::Next {
+    log!("seamless: falling back to a fresh process");
+    match next {
+        seamless::Next::Menu(notice) => ui::relaunch_to_menu_with(&args.mcc, notice.as_deref()),
+        seamless::Next::Game(a) => {
+            let exe = std::env::current_exe().unwrap_or_default();
+            let _ = std::fs::copy(exe.with_file_name("reach-host.log"), exe.with_file_name("reach-host-game.log"));
+            match std::process::Command::new(&exe).args(&a).env("REACH_VOTE_PREV_PID", std::process::id().to_string()).spawn() {
+                Ok(c) => log!("seamless: next game in process {} with {}", c.id(), a.join(" ")),
+                Err(e) => log!("seamless: could not start the next game: {e}"),
+            }
+            ui::hard_exit(0);
         }
     }
 }
 
 /// Our UDP transport, the info query, the playlist vote server and the master heartbeat: everything a host needs
-/// before (or, on a lazy dedicated server, without) the engine. Runs once.
+/// before (or, on a lazy dedicated server, without) the engine. A transport already running with the same identity
+/// and address is kept (lazy dedicated server; a vote follow or the next mission in this process, seamless.rs);
+/// any other is closed first.
 fn start_networking(args: &Args) -> Result<(), String> {
-    static DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-    if DONE.swap(true, std::sync::atomic::Ordering::Relaxed) {
+    let same = args.net.as_ref().is_some_and(|n| {
+        let host = n.peers.iter().find(|p| p.0 == net::net_id(0)).map(|p| p.1).filter(|_| n.instance != 0);
+        net::running_as(net::net_id(n.instance), n.bind, host)
+    });
+    if same {
+        log!("network game: keeping the running transport");
+        if let Some(n) = args.net.as_ref().filter(|n| n.instance == 0) {
+            set_query_info(args, n); // the next mission's map
+        }
         return Ok(());
     }
+    stop_networking();
     if let Some(n) = &args.net {
         log!("network game: instance {} of {} ({}), session id {:#x}, xuid {:#x}",
             n.instance, n.players, if n.instance == 0 { "host" } else { "client" }, n.session_id, options::xuid(n.instance));
         host::LOCAL_XUID.store(options::xuid(n.instance), std::sync::atomic::Ordering::Relaxed);
         net::start(net::net_id(n.instance), n.bind, n.peers.clone())?;
+        ping::start(n.instance, n.players); // Tab scoreboard ping (host pings, clients answer)
         if n.instance == 0 {
-            // Any hosting instance answers the browser's UDP info query (query.rs), master or not.
-            let file = |p: &Option<PathBuf>| p.as_ref().and_then(|p| p.file_name()).map(|f| f.to_string_lossy().into_owned());
-            let mode = match args.build.mode {
-                options::Mode::Firefight => query::MODE_FIREFIGHT,
-                options::Mode::Campaign { .. } => query::MODE_CAMPAIGN,
-                options::Mode::Multiplayer if args.build.game_variant.as_deref().is_some_and(forge::is_forge_file) => query::MODE_FORGE,
-                options::Mode::Multiplayer => query::MODE_MULTIPLAYER,
-            };
-            query::set_info(query::Info {
-                name: args.server_name.clone(),
-                version: env!("CARGO_PKG_VERSION").into(),
-                map: args.build.map.clone().or_else(|| file(&args.build.map_variant)).unwrap_or_default(),
-                // Same fallback the master heartbeat registers when no --game-variant was given.
-                game_variant: file(&args.build.game_variant).unwrap_or_else(|| if mode == query::MODE_FIREFIGHT { "hr_ff_standard_1set.bin" } else { "slayer_054.bin" }.into()),
-                mode,
-                max_players: n.players.min(255) as u8,
-                dedicated: host::DEDICATED.load(std::sync::atomic::Ordering::Relaxed),
-                network_id: net::net_id(0),
-                session_id: n.session_id,
-                playlist: playlist::get().map(|p| p.name.clone()).unwrap_or_default(),
-            });
+            set_query_info(args, n);
             vote::start_server(); // no-op without --playlist
         }
         if let (Some(master), 0) = (&args.master, n.instance) {
@@ -814,6 +969,40 @@ fn start_networking(args: &Args) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// What the UDP info query answers for a hosting instance (query.rs).
+fn set_query_info(args: &Args, n: &NetArgs) {
+    // Any hosting instance answers the browser's UDP info query (query.rs), master or not.
+    let file = |p: &Option<PathBuf>| p.as_ref().and_then(|p| p.file_name()).map(|f| f.to_string_lossy().into_owned());
+    let mode = match args.build.mode {
+        options::Mode::Firefight => query::MODE_FIREFIGHT,
+        options::Mode::Campaign { .. } => query::MODE_CAMPAIGN,
+        options::Mode::Multiplayer if args.build.game_variant.as_deref().is_some_and(forge::is_forge_file) => query::MODE_FORGE,
+        options::Mode::Multiplayer => query::MODE_MULTIPLAYER,
+    };
+    query::set_info(query::Info {
+        name: args.server_name.clone(),
+        version: env!("CARGO_PKG_VERSION").into(),
+        map: args.build.map.clone().or_else(|| file(&args.build.map_variant)).unwrap_or_default(),
+        // Same fallback the master heartbeat registers when no --game-variant was given.
+        game_variant: file(&args.build.game_variant).unwrap_or_else(|| if mode == query::MODE_FIREFIGHT { "hr_ff_standard_1set.bin" } else { "slayer_054.bin" }.into()),
+        mode,
+        max_players: n.players.min(255) as u8,
+        dedicated: host::DEDICATED.load(std::sync::atomic::Ordering::Relaxed),
+        network_id: net::net_id(0),
+        session_id: n.session_id,
+        playlist: playlist::get().map(|p| p.name.clone()).unwrap_or_default(),
+    });
+}
+
+/// Close the transport and its side channels (seamless.rs: back to the menu, or a game with other network flags).
+fn stop_networking() {
+    if net::running() {
+        net::stop();
+        nat::stop();
+        ui::hostinfo::stop();
+    }
 }
 
 /// Debug aid (`REACH_SAMPLE=1`): suspend the game thread every 5 ms, record where it is (engine RVA of rip plus

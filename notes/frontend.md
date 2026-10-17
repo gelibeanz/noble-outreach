@@ -8,7 +8,8 @@ zig like the rest.
 ## When it shows
 - **Main menu**: `reach-host --mcc <dir>` with no launch arguments (no `--map/--game-variant/--map-variant`,
   `--options`, `--net-role/--local-pair/--join-server`, `--dedicated`, `--no-launch`, `--hidden`). Any of those
-  skips the menu exactly as before.
+  skips the menu exactly as before. Background (HOME / PLAY / HOST): the player's Spartan live from the preview
+  engine, or still install art (`ui/menu_scene.rs`, toggle Graphics > Live menu background; notes/customization.md).
 - **Pause overlay**: in game, Esc (or pad Start) fires the engine's pause action, which calls host slot 7 and
   draws nothing itself. Slot 7 opens the overlay. The game keeps running underneath.
 
@@ -49,6 +50,10 @@ top of slot 1 `end_frame`, `capture_back_buffer` made `pub`), `input.rs` (`set_u
   and makes slot 36 report player 0's device with no keys/mouse (so the engine does not pause for a missing
   device). Open/close are posted to the window (`WM_UI_OPEN/CLOSE`) because capture and cursor belong to the
   window thread.
+- **Seamless (2026-10-17):** LEAVE GAME, host left, the 20 s join watchdog and a menu game's end now end the
+  engine in place and show the menu in the same window and process (notes/engine-interface.md "Game after game in
+  one process"; a "Leaving the game" card is drawn in between, `ui/loading.rs`). The relaunch below is the
+  fallback (`REACH_RELAUNCH=1`, or when the engine cannot be ended in place).
 - **LEAVE GAME** (2026-10-15 fix): posts engine message 13 (quit), then main sends the bye packet to every
   peer (notes/networking.md) and returns to the menu at once: starts a new `reach-host --mcc …`
   (env `REACH_UI_RELAUNCHED=1`) and TerminateProcess-es itself (no waiting for the game thread, no DLL detach; msg 13
@@ -166,18 +171,47 @@ Overlay pages: add a `Page` variant in `overlay.rs` and a branch in `draw_ui`.
   screen ids (string ids 0x800d0 `scoreboard`, 0x800d1 `scoreboard_half`, table at 0x1809c1fc8) never appear as code
   immediates; the screen loader is `0x1802c9efc` (window manager, render window, screen id, ...), with id-taking
   wrappers 0x1802ccb84 / 0x1802ee120. Making the engine's own gui screens render was not pursued.
-- **Ours (ui/scoreboard.rs):** while action 0x3b is held for player 0 (keyboard/mouse record at 0x18287ff94 +0x224 +
-  0x3b×0x10, pad via the index table at +0x100; +2 = held frames; device from 0x182dfbe74) the overlay's passive layer
-  draws a centred panel: rank, name, score, team colour bar, local player highlighted.
-- **Data:** game-thread TLS block (captured in slot 36): +0x18 players data array → +0x50 datums of 0x490 bytes
-  (u16 salt at +0 non-zero = used; +0x08 u64 xuid; +0xAD i8 team, -1 none; +0xB0 UTF-16 name[16]; +0x1C8 respawn
-  timer and +0x2EE s16 lives remaining per the HUD tokens). Score as the HUD's `#local_player_score` (0x180079b20):
-  game-engine globals TLS +0x20, valid while +0x841C is 1..4, s16 at +0x3270 + index×8 (+2 when TLS +0x48 → +0x1EAB8
-  is set: round score). Team score: 0x180079f1c. Kills/deaths not located (BuildGameResultsForHost 0x1800f92e8 copies
-  datum +0xB0..+0x12F into game results at 0x1828b83b0, stride 0xD8).
-- `REACH_SB_DUMP=1` writes the players array + game-results block to `sb-dump-N.bin` on each press (layout work).
-- Verified: 2-player listen Slayer, Tab captures on both instances show "Friend" and "Player" with score 0 (no kills
-  made in the test, so non-zero scores are unverified).
+- **Ours (ui/scoreboard.rs, Reclaimer-style since 2026-10-17):** while action 0x3b is held for player 0 (keyboard/mouse
+  record at 0x18287ff94 +0x224 + 0x3b×0x10, pad via the index table at +0x100; +2 = held frames; device from
+  0x182dfbe74) the overlay's passive layer draws a centred panel: "SCOREBOARD (n/max)", dim column headers PLAYER /
+  SCORE / KILLS / DEATHS / ASSISTS / PING. Team games: a header row per team ("RED TEAM (n)" in team colour, team
+  score under SCORE), best team first, then that team's rows as solid team-colour bars; free-for-all: one list of
+  grey bars. Each row: name, centred numbers, a ping chip (dark box, 4 signal bars, "53 ms"; green < 100 ms, amber
+  < 180, red), and a "≡" menu button; the local row has a gold outline and no button. No VOICE column, mute,
+  emblems, ranks or service tags (no voice chat; emblems are open; the service tag is not in the player datum).
+- **Mouse mode:** right-click while Tab is held turns it on: the UI takes the mouse (cursor freed, game input withheld,
+  as for the pause overlay) and the board stays up without Tab. Esc, Tab or another right-click closes it. While Tab
+  is held, right mouse is not passed to the engine (it would zoom; input.rs `fill_input_state`). "≡" opens a menu:
+  **Vote to kick** (`vote::call_vote(CallKind::Kick, Some(name))`, feat/votes) and **Copy name** (Windows clipboard).
+  The result shows as the hint line under the list for 4 s.
+- **Data:** game-thread TLS block (captured in slot 36, and on a dedicated server in throttle.rs's pump hook):
+  +0x18 players data array → +0x50 datums of 0x490 bytes (u16 salt at +0 non-zero = used; +0x08 u64 xuid; +0xAD i8
+  team, -1 none; +0xB0 UTF-16 name[16]; +0x1C8 respawn timer and +0x2EE s16 lives remaining per the HUD tokens).
+  Score as the HUD's `#local_player_score` (0x180079b20): game-engine globals TLS +0x20, valid while +0x841C is
+  1..4, s16 at +0x3270 + index×8 (+2 when TLS +0x48 → +0x1EAB8 is set: round score). Team game: globals +0 bit 3.
+  Team score (0x180079f1c): s16 at the same table +0x80 + team×8 (+2 round).
+- **Kills / deaths / assists:** the engine's live game results, updated every tick by 0x1800f88d0 (named `UpdateLiveGameResultsPlayers` in Ghidra) and copied into the
+  host's game result at the end (BuildGameResultsForHost 0x1800f92e8): player entries 16 × 0xD8 at 0x1828c82a8 (u8 in
+  use at +0, u64 xuid at +7, lookup by xuid as 0x1800fed6c does), statistics 16 × 0x708 at 0x1828c9200 (entry k at
+  +k×0x708), one s16 per statistic in the order of the statistic definition table at 0x180b016f0 (pairs {name,
+  bits}): 0 games-played, 1 games-completed, 2 games-won, 3 games-tied, 4 rounds-completed, 5 rounds-won,
+  6 in-round-score, 7 in-game-total-score, **8 kills, 9 assists, 10 deaths**, 11 betrayals, 12 suicides,
+  13 most-kills-in-a-row, 14 seconds-alive, 15-18 custom 1-4, 19 firefight-generators-destroyed.
+  Verified by memory diffs (`REACH_SB_DUMP`, 3 dumps around two `unit_kill`s): word 10 went 0/1/2, word 14 counted
+  seconds alive (1/9/17), word 0 = 1; kills and assists are placed by the table order (no player-on-player kill
+  could be scripted). `unit_kill` counts a death (score −1 in Slayer) but not a suicide (word 12 stayed 0).
+  A **client's** copy misses deaths it did not see (2-player test: host D1/D2, client D0/D1), so the host sends its
+  counts with the ping table (notes/networking.md "Ping") and clients show those.
+- **Ping:** ping.rs (RPNG); max players for the title from `--players` (a joiner: the server's max), 16 offline.
+- `REACH_SB_DUMP=1` writes, on each press, the TLS block (0x400), ±7 MB of game state around the engine globals and
+  the DLL's .data (0x180afa000..0x184e54000) to `sb-dump-N.bin` (segments [u64 address][u64 length][bytes],
+  committed memory only; ~85 MB each). `REACH_SB_MENU=1|kick|copy`: in mouse mode, open the first other player's
+  menu (and press that item once).
+- Verified 2026-10-17 (hidden pair on 127.0.0.1:48850/48851, `--test-input`, captures looked at): team Slayer and FFA
+  on both instances show the right deaths, scores, team scores and 0-1 ms pings; right-click mouse mode opened the
+  menu, "Copy name" logged `Copied "Player 2"`; a dedicated server sent counts and pings to its client ("(1/4)").
+- **Open:** Firefight per-player score is still 0 (handover open item 2; candidates: statistic 7 in-game-total-score
+  above, or the survival globals, not checked). Pad users have no mouse mode (no pad navigation of the menu yet).
 
 ## Customize screen (2026-10-15)
 Main menu entry CUSTOMIZE (`customize.rs`), laid out after Reclaimer's: player card + rows (armour, colours, Spartan
@@ -240,3 +274,25 @@ Main menu entry CAMPAIGN (full window, Reclaimer's Halo 3 campaign screen adapte
 ## Forge screen (2026-10-15, `ui/forge.rs`)
 Main menu entry FORGE: maps / saved maps with install art, START FORGE / HOST FORGE, play a saved map with a game type,
 pause-menu SAVE MAP section, map-variant row on Play / Host. Details and verification: [forge.md](forge.md).
+
+## Menu music (2026-10-17, `music.rs`)
+The main menu plays Reach's own menu theme, decoded at runtime from the player's install (nothing shipped). Started in
+`main.rs` just before `ui::menu::run`, faded out (about 1 s) and joined when the menu returns (game launch or quit).
+Volume = `Settings.audio.menu_music` (Audio page, "Menu music"), re-read live; 0 pauses the stream.
+- Audio: `haloreach/fmod/pc/sfx.fsb`, FSB5 v1, codec 15 (Vorbis), 16162 samples. Header 0x3C bytes: u32 numSamples @8,
+  sampleHeadersSize @12, nameTableSize @16, dataSize @20. Sample data at 0x3C + shs + nts. Per sample a u64: bit0 has
+  chunks, bits 7..33 data offset / 32, bits 34.. sample count; chunks u32 {bit0 more, bits1-24 size, bits25-31 type},
+  type 11 = Vorbis, first u32 = setup-header CRC. Packets are `{u16 size, bytes}`; no Vorbis headers in the bank.
+- Names in the bank are short; `sfx.fsb.info` (0x118-byte entries, same order, full path at +0x18) gives the real path.
+  Menu music = paths under `data\sound\music\reach_menu\track1\`: `in\02_menu_in` (intro, 16 s) + 12 `loop\*`
+  (hymn_brass, sad_strings, spacey7, tlr_rhythm, 08_tplse, 14_strings, each plus a `_01`). Stereo 48 kHz. Order: intro,
+  then random loops, never the same twice in a row; tracks are joined gaplessly (no crossfade).
+- Setup header comes from the player's `haloreach.dll`: FMOD's fsbvorbis codec (0x1805c51c0) searches a table at
+  0x180a725c0, 0x20-byte rows {u64 data VA, u32 size, u32 crc, u64 base VA, u32 patch offset, u32 patch length}. Base 0:
+  data is the complete header (`\x05vorbis...`). Else header = `size` bytes copied from base, then `patch length` bytes at
+  `patch offset` replaced from data (menu CRC 0xad11d38d: base 0x180a57d80, size 3484, patch 31 bytes at 3405). The host
+  scans the DLL for rows by CRC (PE sections parsed, no fixed offsets); a different build logs `music: none (...)`.
+  Using the base unpatched decodes without errors but as noise bursts: the patch matters.
+- Ident header synthesised for lewton: channels 2, 48000 Hz, blocksizes 256/2048 (byte 0xB8).
+- Test hooks: `REACH_MUSIC_DUMP=<wav>` writes the first 30 s decoded and logs RMS instead of playing;
+  `REACH_MUSIC_TRACKS=1` (with DUMP) logs per-track length, rms and diff/rms (about 0.1 for real music, 1.0 = noise).

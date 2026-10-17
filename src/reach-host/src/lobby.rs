@@ -177,6 +177,18 @@ pub const IN_PROGRESS_MSG: &str = "Campaign in progress: wait for the next missi
 ///    the session not joinable → nops. See notes/campaign-firefight.md.
 pub static JIP: AtomicBool = AtomicBool::new(false);
 
+/// Between two games in one process (seamless.rs): back to "no lobby"; main sets it up again from the arguments.
+pub fn reset() {
+    for f in [&ENABLED, &LISTEN, &START_NOW, &HOLDING, &IN_PROGRESS, &RELEASED] {
+        f.store(false, Ordering::Relaxed);
+    }
+    GATHERED.store(0, Ordering::Relaxed);
+    SECS_LEFT.store(0, Ordering::Relaxed);
+    FIRST_MS.store(0, Ordering::Relaxed);
+    WAIT_SECS.store(45, Ordering::Relaxed);
+    *CLIENT_VIEW.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
+
 unsafe fn patch_bytes(site: *mut u8, want: &[u8], new: &[u8]) -> bool {
     use windows::Win32::System::Memory::{VirtualProtect, PAGE_EXECUTE_READWRITE, PAGE_PROTECTION_FLAGS};
     if std::slice::from_raw_parts(site, want.len()) != want {

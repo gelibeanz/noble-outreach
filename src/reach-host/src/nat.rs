@@ -281,6 +281,12 @@ fn allow_ack() -> bool {
 
 // ---- Host side -------------------------------------------------------------------------------------------------
 
+/// Transport closed (seamless.rs): forget the host / joiner state; the registration thread ends on its own.
+pub fn stop() {
+    *HOST.lock().unwrap() = None;
+    *CLIENT.lock().unwrap() = None;
+}
+
 /// Listen host without `--public-addr`: register with the rendezvous and try UPnP, both in the background.
 pub fn start_host(port: u16, masters: Vec<String>) {
     let upnp = if NO_UPNP.load(Ordering::Relaxed) { Upnp::Off } else { Upnp::Trying };
@@ -288,6 +294,7 @@ pub fn start_host(port: u16, masters: Vec<String>) {
     if upnp == Upnp::Trying {
         std::thread::spawn(move || try_upnp(port));
     }
+    let gen = crate::net::generation(); // the registration ends with our transport (seamless.rs)
     std::thread::spawn(move || {
         let Some(rv) = find_rendezvous(&masters) else {
             if let Some(h) = HOST.lock().unwrap().as_mut() {
@@ -301,7 +308,7 @@ pub fn start_host(port: u16, masters: Vec<String>) {
         }
         // Re-register every 10 s: keeps our entry and our router's UDP mapping to the rendezvous alive.
         let mut n = 0u32;
-        loop {
+        while crate::net::generation() == gen {
             send(rv, Packet { kind: KIND_REGISTER, status: 0, token: token(), addr: None });
             n += 1;
             let registered = HOST.lock().unwrap().as_ref().is_some_and(|h| h.punched.is_some());

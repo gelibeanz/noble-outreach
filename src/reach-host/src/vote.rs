@@ -605,10 +605,13 @@ pub fn handle(_sock: &UdpSocket, pkt: &[u8], from: SocketAddr) -> bool {
 pub static LAUNCH_ARGS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
 
 /// Client: the server restarts into `m`. Wait until it answers the info query with the new map and variant, then
-/// relaunch this exe with the new mode flags (same identity, bind and peer) and exit.
+/// hand the new mode flags (same identity, bind and peer) to main, which ends this game and starts that one in the
+/// same window (seamless.rs); with `REACH_RELAUNCH=1`, relaunch this exe with them and exit, as before.
 fn follow(m: ResultMsg) {
     let Some(host) = crate::net::host_addr() else { return };
-    let argv: Vec<String> = LAUNCH_ARGS.get().cloned().unwrap_or_else(|| std::env::args().skip(1).collect());
+    let seamless = crate::seamless::enabled();
+    let argv: Vec<String> = Some(crate::seamless::argv()).filter(|a| seamless && !a.is_empty())
+        .or_else(|| LAUNCH_ARGS.get().cloned()).unwrap_or_else(|| std::env::args().skip(1).collect());
     let mcc = argv.iter().position(|a| a == "--mcc").and_then(|i| argv.get(i + 1)).map(std::path::PathBuf::from)
         .or_else(|| std::env::var_os("MCC_PATH").map(Into::into)).unwrap_or_default();
     // --join-server picks the map from the master listing again; otherwise swap the mode flags.
@@ -646,6 +649,11 @@ fn follow(m: ResultMsg) {
         }
         std::thread::sleep(Duration::from_millis(500));
     }
+    if seamless {
+        log!("vote: rejoining in this window with {}", new_argv.join(" "));
+        crate::seamless::set_next(crate::seamless::Next::Game(new_argv));
+        return;
+    }
     let exe = std::env::current_exe().unwrap_or_default();
     let _ = std::fs::copy(exe.with_file_name("reach-host.log"), exe.with_file_name("reach-host-prevote.log"));
     match std::process::Command::new(&exe).args(&new_argv).env("REACH_VOTE_PREV_PID", std::process::id().to_string()).spawn() {
@@ -659,6 +667,11 @@ fn follow(m: ResultMsg) {
         let _ = TerminateProcess(GetCurrentProcess(), 0);
     }
     std::process::exit(0);
+}
+
+/// The followed game has started in this process (seamless.rs): the next vote result may be followed again.
+pub fn end_follow() {
+    FOLLOWING.store(false, Ordering::Relaxed);
 }
 
 /// Start of a process relaunched by `follow`: wait (up to 10 s) for the old one to exit so its UDP port is free.
@@ -681,6 +694,13 @@ pub fn await_previous() {
         }
     }
 }
+
+// stub: replaced by feat/votes
+#[allow(dead_code)]
+pub enum CallKind { Shuffle, Kick, Skip, Restart }
+
+// stub: replaced by feat/votes
+pub fn call_vote(kind: CallKind, target: Option<&str>) -> bool { let _ = (kind, target); false }
 
 #[cfg(test)]
 mod tests {

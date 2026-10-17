@@ -248,20 +248,25 @@ pub struct CustomizeScreen {
 }
 
 /// Default 3D preview camera: facing the model, slightly above, whole body in frame.
-const VIEW_YAW: f32 = 0.35;
+const VIEW_YAW: f32 = 1.0;
 const VIEW_PITCH: f32 = 0.05;
-const VIEW_DIST: f32 = 6.4;
+const VIEW_DIST: f32 = 2.6;
 
 impl CustomizeScreen {
     pub fn new() -> Self {
-        crate::preview::start(); // the engine-rendered model (a hidden child process, ~20 s to load)
+        crate::preview::start(); // normally already started with the menu (a hidden child process, ~20 s to load)
         let s = settings::get();
         let field = if s.armour.elite { Field::EliteArmour } else { Field::Helmet };
         CustomizeScreen { s, field, trying: None, yaw: VIEW_YAW, pitch: VIEW_PITCH, dist: VIEW_DIST }
     }
 
-    /// Unattended captures (REACH_UI_SHOT=customize-<field>): select a row by its label, e.g. `primary`, `elite`.
+    /// Unattended captures (REACH_UI_SHOT=customize-<field>): select a row by its label, e.g. `primary`, `elite`;
+    /// `yaw<degrees>` turns the 3D camera from the default view (full-orbit check).
     pub fn open_field(&mut self, name: &str) {
+        if let Some(d) = name.strip_prefix("yaw").and_then(|d| d.parse::<f32>().ok()) {
+            self.yaw = VIEW_YAW + d.to_radians();
+            return;
+        }
         if name == "elite" {
             self.s.armour.elite = true; // shown only, not saved
             self.field = Field::EliteArmour;
@@ -487,7 +492,7 @@ impl CustomizeScreen {
         if resp.hovered() {
             let wheel = ui.input(|i| i.smooth_scroll_delta.y);
             if wheel != 0.0 {
-                self.dist = (self.dist * (-wheel * 0.0025).exp()).clamp(1.6, 7.5);
+                self.dist = (self.dist * (-wheel * 0.0025).exp()).clamp(1.0, 4.5);
             }
         }
         // Elites stand taller: step back a little so the whole model stays in frame.

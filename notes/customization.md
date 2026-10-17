@@ -57,8 +57,9 @@ three colours by xuid; we return nothing. Needs our own emblem renderer (foregro
 
 ## 3D preview (2026-10-15)
 MCC has no Reach menu scene (no mainmenu map; MCC's own armoury is its UE frontend), so the preview is the engine
-itself in a **hidden child process**: the CUSTOMIZE screen runs `reach-host --mcc <dir> --preview <mapping> --size
-720x900`, which rewrites itself into a solo Slayer (`20_sword_slayer`, `slayer_054.bin`, `--hidden`, own log
+itself in a **hidden child process**: the menu (since 2026-10-17 at launch, not on the first CUSTOMIZE open) runs
+`reach-host --mcc <dir> --preview <mapping> --size 1280x720`, which rewrites itself into a solo Slayer (`35_island`
+Spire since 2026-10-17, was `20_sword_slayer`; `slayer_054.bin`, `--hidden`, own log
 `reach-host-preview.log`, no XAudio2 preload = silent), puts an orbit camera on its own biped and copies its frames into
 shared memory the menu draws as an egui texture. Menu and engine stay separate processes: the menu keeps running at
 full speed while the engine loads (~20 s to the first frame; the flat figure shows meanwhile, "LOADING 3D PREVIEW"),
@@ -87,7 +88,9 @@ and a crash or missing engine just leaves the flat figure.
   +0x20 distance (clamped to the target's size), +0x24 height added to the eye point, +0x28 marker offset scale. The
   observer director copies its +0x198 / +0x19C into +0x24 / +0x28 every tick (they are not yaw/pitch). The camera
   looks at the target's centre from (yaw, pitch, distance); yaw = biped facing (player control +0x94 at install) +
-  π faces the model. Field of view = profile +0x14 (40° in the child, re-read on msg 5).
+  π was meant to face the model, but captures show the biped's right side there: since 2026-10-17 the child uses
+  facing + π/2 (and customize's default view yaw 1.0). Field of view = profile +0x14 (40° for CUSTOMIZE, 68° for
+  the menu background; the `view` command's fourth number, applied with msg 5 when it changes).
 - **Live changes:** armour/colours change on the standing biped through `write_armour` + engine message 5 (verified:
   helmet and both colours changed between captures without a respawn). Spartan ↔ Elite needs a new biped:
   `unit_kill_silent`, Slayer respawns in ~5 s and the observer director re-targets the new unit.
@@ -97,18 +100,67 @@ and a crash or missing engine just leaves the flat figure.
   menu dims the last frame with "SWITCHING TO …" (before 2026-10-15 evening it streamed the death camera and the
   loadout picker, which looked like the character just died).
 
+### The wall (camera blocked at some yaws), 2026-10-17
+- Cause: the observer's camera collision. `UpdateObserverCollision` 0x1800ca90c calls the collision test
+  0x18018a138 (call at 0x1800caa0d) and scales the orbit distance by the hit fraction (smoothed at observer
+  +0x12C; observers at TLS +0x688, 0x410 each). Sword Base spawns are all against walls, so the camera was pulled
+  in at most yaws (it also meant the customize distance 6.4 never applied: unobstructed it is ~4x too far).
+- Fix (child only): NOP that 5-byte call; both fractions stay 1.0, the camera orbits at the requested distance
+  through anything. Plus an open spot so nothing stands between camera and biped: map Spire (`35_island`), biped
+  moved to (-178.8, -386.0, -59.4) facing π (open sand, the spire and cliffs behind), customize distance 2.6
+  (wheel 1.0..4.5). Verified: customize captures at yaw 0/90/180/270 all show the full model (`REACH_UI_SHOT=
+  customize-yaw0,customize-yaw90,...`; `customize-yaw<deg>` turns the view).
+- Moving the biped: `ObjectTeleport(object, pos*, forward*, up*, detach u8)` 0x1801ec468 (body of the
+  `object_teleport` script command 0x18019be14; also sets the unit's aim to `forward`). Calling it from the input
+  poll (slot 36) faults at haloreach+0x14173: per-thread physics table [0x180b93550]+0x34318 indexed by TLS +0x338;
+  on the game thread the index is 1 and slot 1 is null, slot 2 is filled. It also faulted inside a script command,
+  so the child swaps the index to the first filled slot around the call (works, not understood why slot 1 is empty).
+  It runs as a script command: `cheat_teleport_to_camera` (function 388, stripped stub, no parameters) has its
+  evaluate pointer (+0x20, stub 0x180086cbc; `ScriptReturn(thread, value)` 0x180085de0) pointed at ours. The engine
+  sometimes drops the command, so the child re-checks the position twice a second and repeats it. The look yaw
+  (player control +0x94) is held at the spot facing every tick, or the body turns back to the spawn facing. Debug:
+  `REACH_PREVIEW_SPOT="x y z yaw"`, test-script `set spot x y z yaw` and `set view yaw pitch dist`.
+
+### Instant Spartan <-> Elite (WIP, paused 2026-10-17)
+- Player datum: players table TLS +0x18 -> +0x50, 0x490 bytes each, unit at +0x28 (previous unit +0x2C). After
+  a death **+0x1BC is the respawn countdown in ticks** (0x128 = 296 = ~5 s, counts down 16 per 0.27 s), +0x1C8 the
+  whole seconds shown, +0x1CC counts up. Writing +0x1BC = 1 while dead makes the new biped appear on the next tick
+  (measured: ~80 ms after the kill on Spire); the child does it for every wait, the first spawn too.
+- Not working yet: after that fast respawn the camera did not show the new biped (frames showed the empty spot;
+  `SetDirectorCameraMode` returned 0 on the re-install, it returned 1 on Sword Base before). Next: check whether
+  the observer director still targets the dead unit, re-install the director a few ticks later, and only then
+  clear "switching". The KILLED_AT timing log fires before the kill command has run (measures nothing yet).
+- Not tried: a game variant with instant respawn, a second child per species.
+- Debug: `REACH_PREVIEW_DUMP=1` logs the player datum words that change, every 0.25 s.
+
+### Main-menu background (`ui/menu_scene.rs`, 2026-10-17)
+- `Settings.graphics.live_menu_scene` (Graphics page, "Live menu background", default on). On HOME / PLAY / HOST:
+  the child's frames full screen with the player's own look, camera yaw 1.0 ± 0.5 rad over 90 s, pitch 0.04,
+  distance 3.4, FOV 68, frame drawn 1.2x and anchored left so the Spartan stands right of the menu column; dark
+  gradient over the left 62 % and the bottom. Same child as CUSTOMIZE, which sets its own camera: switching is
+  instant. Until the first frame (~20 s after launch) and with the setting off: still art `HREACHMP_SPIRELARGE`
+  (levels pack, 668x292 BC1; fallbacks Forge World, Tip of the Spear) covering the window with a 2-minute pan,
+  crossfading (1.5 s) to the live frames. The packs' largest wide art is 668x292; loadingtexturepack uses another
+  format (.idx) our reader does not handle.
+- Frames: child renders 1280x720, shared buffers now up to 1920x1080 (2 x 8.3 MB). 960x540 cost the same CPU.
+- Test steps: `REACH_UI_SHOT=home` (still art, right after launch), `home-live` (waits for live frames +
+  `REACH_PREVIEW_SETTLE_SECS`, default 3 s).
+
 ### Child protocol (`preview.rs`)
-- stdin lines from the menu: `view <yaw> <pitch> <dist>`, `armour <Armour as JSON>`; end of input = exit.
+- stdin lines from the menu: `view <yaw> <pitch> <dist> [fov]`, `armour <Armour as JSON>`; end of input = exit.
   (umu-run does not forward stdin, so standalone tests use `REACH_PREVIEW_VIEW="yaw pitch dist"` and the test-script
   steps `set armour helmet|primary|secondary|elite <hex>` and `hs <expr>`; `hs ?dir` logs director 0.)
 - Shared memory `Local\ReachPreview<menu pid>` (menu creates, child opens): 64-byte header {magic "RP3D", width,
-  height, seq, state, child pid, menu tick} + two RGBA buffers of 1024×1024. The child (host slot 1, render thread)
+  height, seq, state, child pid, menu tick} + two RGBA buffers of 1920×1080 (1024×1024 before 2026-10-17). The child (host slot 1, render thread)
   copies the back buffer through two staging textures into buffer (seq+1)%2, then bumps seq.
 - Pacing: the child's render thread sleeps to ~30 fps while the menu draws the pane (it bumps header word 6 each
   frame), ~4 fps otherwise (4 fps path unverified).
 - The child exits when its game thread ends (Slayer time limit); the menu restarts it (at most once a minute), keeping
-  the last frame on screen.
+  the last frame on screen. Since it starts with the menu, the menu polls it every frame (`menu_tick`), not only
+  while CUSTOMIZE is open.
 - Cost (2026-10-15, GE-Proton, desktop PC): child ~1.55 GB RSS, ~32 % of one core steady at 30 fps (~75-80 %
-  unpaced, ~145 % while loading); menu process ~340 MB. Started on first CUSTOMIZE open, kept until the menu
-  launches a game or quits.
+  unpaced, ~145 % while loading); menu process ~340 MB. Kept until the menu launches a game or quits.
+- Cost 2026-10-17 (Spire, 1280x720, GE-Proton, RTX 3070 desktop; 15 s samples after load): background shown
+  (30 fps): child ~1.45-1.75 GB RSS, ~85 % of one core, menu ~360 MB, ~45 %. Background off / not shown (4 fps):
+  child ~1.4 GB, ~25 %, menu ~350 MB, ~18 %. Loading: ~150-190 % for ~20 s after launch.
 

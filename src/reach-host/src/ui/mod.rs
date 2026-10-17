@@ -10,8 +10,10 @@ pub mod campaign;
 pub mod customize;
 pub mod forge;
 pub mod hostinfo;
+pub mod loading;
 pub mod mccart;
 pub mod menu;
+pub mod menu_scene;
 pub mod overlay;
 pub mod scoreboard;
 pub mod settings;
@@ -319,7 +321,8 @@ pub fn shot_steps() -> Vec<String> {
     std::env::var("REACH_UI_SHOT").map(|v| v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()).unwrap_or_default()
 }
 
-/// Start a fresh reach-host showing the main menu, then exit this one (the engine cannot be restarted in-process).
+/// Start a fresh reach-host showing the main menu, then exit this one. Only used with `REACH_RELAUNCH=1` or when the
+/// engine could not be ended in place; normally the menu comes back in this process (seamless.rs).
 pub fn relaunch_to_menu(mcc: &std::path::Path) -> ! {
     relaunch_to_menu_with(mcc, None)
 }

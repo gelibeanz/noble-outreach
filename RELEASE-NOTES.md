@@ -1,50 +1,51 @@
-# Noble Outreach 0.2.0
+# Noble Outreach 0.3.0
 
 A standalone community client for Halo: Reach on PC. It runs the engine from your own Steam copy of Halo: The
-Master Chief Collection. This release comes from the first long online sessions with players on Windows and Linux.
+Master Chief Collection. This release is about the menus and moving from one game to the next.
 
 **You need:** MCC on Steam, build **2025.08.16** (`2025.08.16.178512.1`), with Halo: Reach installed. Linux
 also needs [umu-launcher](https://github.com/Open-Wine-Components/umu-launcher). The launcher updates itself from
-0.1.0.
+0.2.0.
 
 ## Downloads
 - `NobleOutreach-Launcher.exe` (Windows, unsigned: SmartScreen > More info > Run anyway) or
   `NobleOutreach-Launcher-linux` (`chmod +x`). The launcher installs and updates the game client.
-- `NobleOutreach-Server-v0.2.0.tar.gz`: dedicated server (`reach-host.exe --dedicated`) and a static `reach-master`.
+- `NobleOutreach-Server-v0.3.0.tar.gz`: dedicated server (`reach-host.exe --dedicated`) and a static `reach-master`.
 - `reach-host.exe` and `SHA256SUMS` are what the launcher downloads and checks.
 
-## Graphics
-- **Graphics quality is now High.** 0.1.0 ran the engine's Low preset by mistake, with halved detail distances
-  and some lighting, shadow and effect features switched off. Distant objects looked flat or blocky, and fades
-  showed as checkerboards. *Settings > Video > Graphics quality* picks Low, Medium or High while you play.
-- **Sharp picture on Windows with display scaling** (125 %, 150 % ...). The game used to be drawn smaller and
-  stretched by Windows.
-- *Settings > Video > Menu size* (60-125 %). Menus and panels also fit narrower windows and screens now.
+## Main menu
+- **Menu music.** The main menu plays Halo: Reach's own menu theme, read from your MCC files. *Settings > Audio >
+  Menu music* sets its volume (0 turns it off).
+- **Live background.** Your own Spartan stands on Spire behind the menu, in your armour. Still art from your
+  install shows for the first 20 seconds or so while it loads. *Settings > Graphics > Live menu background*
+  turns it off if your PC is busy (it uses about one CPU core while the menu is open).
+- **CUSTOMIZE is ready sooner:** the 3D preview starts with the menu instead of when you open the screen, and
+  the camera now turns all the way round your character.
 
-## Playlist voting
-- After a vote picks a new game, every player rejoins the restarted server. Before, players who had joined
-  from the server browser came back alone in a local copy of the map, and the old game window could stay open.
-- *Pause menu > Vote for a new game*: any player on a playlist server can start a vote mid-match. The current
-  game is left out of the options, and option 4 is **Keep playing this game**. If nobody votes, the game carries on.
-- Once you have voted in a match, the vote panel shrinks to a bar. Backspace hides it for the round.
+## Game after game in one window
+- When a vote picks the next game, when you leave a game, and when a campaign mission rolls on into the next,
+  the game stays in its window. A loading card with the map's art shows while the next map loads. Before, the
+  game window closed and a new one opened.
+- After many games in one session the client starts the next game in a fresh process to free memory, so you
+  may see the window reopen then.
 
-## Campaign
-- A finished mission rolls on into the next one on a listen server, and the players who joined follow.
-- Dedicated campaign servers show joined players the player count and the countdown while they gather players.
+## Scoreboard
+- Hold **Tab** (pad: Back): teams with their scores, then each player's score, kills, deaths, assists and ping.
+- Right-click while holding Tab to use the mouse: the menu next to a player copies their name. Vote to kick
+  comes with the in-game votes in the next release.
 
-## Joining and controls
-- Esc while joining a game opens the pause menu, so *Leave game* always works.
-- If the host does not answer within 20 seconds, the game goes back to the menu and says why, instead of
-  showing a black screen.
-- In borderless fullscreen the mouse can no longer drift onto another monitor.
-- Settings sliders take a typed value (click the number).
-- Fixed: Esc in a match flashed the pause menu and closed it again.
-- Fixed: the scoreboard and vote panels could cut off their last rows.
-- Fixed: the Elite customisation preview no longer shows the character dying when you switch species.
+## Controls
+- *Settings > Keyboard & mouse* shows the real key for every action, including Forge and Theater, instead of
+  "Default". Forge actions have clearer names (Monitor mode, Create objects, Object properties, ...).
+
+## Fixes
+- The game could fail to start its graphics under Wine/Proton on the first try; it now retries.
 
 ## Known limits
 - **Campaign on a dedicated server can end on its own** soon after the mission starts when two or more players
   are in, and the server then restarts. Host campaign co-op from the menu (listen server) until this is fixed.
+- CUSTOMIZE: switching between Spartan and Elite can keep showing the previous character in the 3D preview.
+  The change is saved and shows in game.
 - The Firefight scoreboard shows 0 for each player. The HUD score is right.
 - A listen host behind carrier-grade NAT (CGNAT, common on mobile and some home broadband) cannot be reached
   directly. Let another player host, or use a dedicated server. NAT punching needs a master server with

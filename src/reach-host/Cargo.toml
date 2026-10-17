@@ -1,6 +1,6 @@
 [package]
 name = "reach-host"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "Standalone Halo: Reach host: loads haloreach.dll, supplies window, D3D11 swap chain and the host interface"
 
@@ -10,6 +10,7 @@ egui-directx11 = "0.13"
 png = "0.18"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+lewton = "0.10"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 webpki-roots = "1"
 windows = { version = "0.62", features = [
@@ -19,6 +20,8 @@ windows = { version = "0.62", features = [
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Gdi",
+    "Win32_Media",
+    "Win32_Media_Audio",
     "Win32_Security",
     "Win32_System_Diagnostics_Debug",
     "Win32_System_Kernel",

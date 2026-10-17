@@ -352,6 +352,9 @@ impl Menu {
     fn ui(&mut self, ui: &mut Ui) {
         theme::backdrop(ui);
         let full = ui.max_rect();
+        if matches!(self.screen, Screen::Home | Screen::Play | Screen::Host) {
+            super::menu_scene::draw(ui, full, &self.mcc, &self.settings); // live Spartan or still art
+        }
         if self.screen == Screen::Settings {
             let ss = self.settings_screen.get_or_insert_with(|| super::settings_screen::SettingsScreen::new(false));
             if ss.ui(ui) {
@@ -653,6 +656,7 @@ impl Menu {
 pub unsafe fn run(hwnd: HWND, sc: &IDXGISwapChain1, dc: &ID3D11DeviceContext, mcc: &Path) -> Choice {
     super::set_active(true);
     let mut menu = Menu::new(mcc);
+    crate::preview::start(); // the 3D preview engine loads in the background (preview.rs), ready for CUSTOMIZE
     let mcc_for_test = mcc.to_path_buf();
     let steps = super::shot_steps();
     let relaunched = std::env::var_os("REACH_UI_RELAUNCHED").is_some();
@@ -678,6 +682,7 @@ pub unsafe fn run(hwnd: HWND, sc: &IDXGISwapChain1, dc: &ID3D11DeviceContext, mc
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
+        crate::preview::menu_tick();
         let mut r = RECT::default();
         let _ = GetClientRect(hwnd, &mut r);
         let (cw, ch) = (r.right as u32, r.bottom as u32);
@@ -695,7 +700,7 @@ pub unsafe fn run(hwnd: HWND, sc: &IDXGISwapChain1, dc: &ID3D11DeviceContext, mc
                     capture = Some("ui-relaunched.bmp".to_string());
                 }
             } else {
-                while step < steps.len() && !matches!(steps[step].as_str(), "home" | "play-screen" | "play-ff" | "play-camp" | "host-ff" | "host-camp" | "browser" | "browser-fav" | "browser-cat" | "browser-sel" | "browser-direct" | "host" | "settings" | "play" | "play-ff-start" | "host-start" | "host-ff-start" | "host-camp-start" | "customize" | "forge" | "forge-saved" | "forge-start" | "forge-host")
+                while step < steps.len() && !matches!(steps[step].as_str(), "home" | "home-live" | "play-screen" | "play-ff" | "play-camp" | "host-ff" | "host-camp" | "browser" | "browser-fav" | "browser-cat" | "browser-sel" | "browser-direct" | "host" | "settings" | "play" | "play-ff-start" | "host-start" | "host-ff-start" | "host-camp-start" | "customize" | "forge" | "forge-saved" | "forge-start" | "forge-host")
                     && !steps[step].starts_with("settings-") && !steps[step].starts_with("customize-") && !steps[step].starts_with("campaign") {
                     step += 1;
                 }
@@ -803,6 +808,8 @@ pub unsafe fn run(hwnd: HWND, sc: &IDXGISwapChain1, dc: &ID3D11DeviceContext, mc
                         let ready = step_frames >= 30 && (menu.browser.is_idle() || step_frames > 600);
                         // CUSTOMIZE: wait for the 3D preview engine (preview.rs) to show the model, up to ~70 s.
                         let ready = ready && (!s.starts_with("customize") || crate::preview::settled() || step_frames > 20000);
+                        // home-live: the live background, once it has faded in (main menu background, menu_scene.rs).
+                        let ready = ready && (s != "home-live" || crate::preview::live_secs() > std::env::var("REACH_PREVIEW_SETTLE_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(3.0) || step_frames > 20000);
                         if ready {
                             capture = Some(format!("ui-{s}.bmp"));
                         }

@@ -7,8 +7,8 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::net::{SocketAddr, UdpSocket};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use crate::log;
@@ -28,6 +28,7 @@ pub fn net_id(instance: u32) -> u64 {
 struct Net {
     sock: UdpSocket,
     my_id: u64,
+    bind: SocketAddr,
     peers: Mutex<Vec<Peer>>,
     queues: Mutex<HashMap<u32, VecDeque<(u64, Vec<u8>)>>>,
 }
@@ -50,7 +51,60 @@ static BYE_QUEUE: Mutex<Vec<u64>> = Mutex::new(Vec::new());
 /// Client: the host (instance 0) said bye, so the game is over for us.
 pub static HOST_LEFT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-static NET: OnceLock<Net> = OnceLock::new();
+static NET: RwLock<Option<Arc<Net>>> = RwLock::new(None);
+/// Bumped by `stop`: the receive thread and the side-channel threads of the old transport (master heartbeat,
+/// rendezvous registration) end when it changes (seamless.rs: one process, several games).
+static GEN: AtomicU32 = AtomicU32::new(0);
+static RECV_THREAD: Mutex<Option<std::thread::JoinHandle<()>>> = Mutex::new(None);
+
+fn net() -> Option<Arc<Net>> {
+    NET.read().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// Current transport generation (see `GEN`).
+pub fn generation() -> u32 {
+    GEN.load(Ordering::Relaxed)
+}
+
+/// Transport running with this identity and bind address (and, for a client, this host address)?
+pub fn running_as(my_id: u64, bind: SocketAddr, host: Option<SocketAddr>) -> bool {
+    net().is_some_and(|n| {
+        n.my_id == my_id && n.bind == bind && host.is_none_or(|h| n.peers.lock().unwrap().iter().any(|p| p.id == net_id(0) && p.addr == h))
+    })
+}
+
+pub fn running() -> bool {
+    net().is_some()
+}
+
+/// Close the socket and end the receive thread, so the next game can bind again (seamless.rs).
+pub fn stop() {
+    let old = NET.write().unwrap_or_else(|e| e.into_inner()).take();
+    if old.is_none() {
+        return;
+    }
+    GEN.fetch_add(1, Ordering::Relaxed);
+    drop(old);
+    if let Some(t) = RECV_THREAD.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        let _ = t.join(); // recv timeout is 200 ms
+    }
+    log!("net: transport stopped");
+}
+
+/// Between two games over the same transport (a vote follow, the next mission): forget the old game's packets and
+/// the host's last answer (the 20 s join watchdog starts again).
+pub fn reset_game() {
+    HOST_LEFT.store(false, Ordering::Relaxed);
+    BYE_QUEUE.lock().unwrap().clear();
+    ROSTER_COUNT.store(0, Ordering::Relaxed);
+    if let Some(n) = net() {
+        n.queues.lock().unwrap().clear();
+        for p in n.peers.lock().unwrap().iter_mut() {
+            p.last_seen = None;
+            p.left = None;
+        }
+    }
+}
 static SENT: AtomicU64 = AtomicU64::new(0);
 static SENT_BYTES: AtomicU64 = AtomicU64::new(0);
 static RECV: AtomicU64 = AtomicU64::new(0);
@@ -77,17 +131,24 @@ pub fn start(my_id: u64, bind: SocketAddr, peers: Vec<(u64, SocketAddr)>) -> Res
         log!("net: peer {id:#x} at {a}");
     }
     let peers = peers.into_iter().map(|(id, addr)| Peer { id, addr, last_seen: None, left: None }).collect();
-    NET.set(Net { sock, my_id, peers: Mutex::new(peers), queues: Mutex::new(HashMap::new()) }).map_err(|_| "net started twice")?;
-    std::thread::spawn(move || recv_loop(recv));
+    let mut slot = NET.write().unwrap_or_else(|e| e.into_inner());
+    if slot.is_some() {
+        return Err("net started twice".into());
+    }
+    let net = Arc::new(Net { sock, my_id, bind, peers: Mutex::new(peers), queues: Mutex::new(HashMap::new()) });
+    *slot = Some(net.clone());
+    drop(slot);
+    let gen = GEN.load(Ordering::Relaxed);
+    *RECV_THREAD.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::thread::spawn(move || recv_loop(recv, net, gen)));
     Ok(())
 }
 
-fn recv_loop(sock: UdpSocket) {
-    let net = NET.get().unwrap();
+fn recv_loop(sock: UdpSocket, net: Arc<Net>, gen: u32) {
+    let net = &*net;
     let mut buf = vec![0u8; 2048];
     let mut last = Instant::now();
     let mut prev = [0u64; 4];
-    loop {
+    while GEN.load(Ordering::Relaxed) == gen {
         match sock.recv_from(&mut buf) {
             // Server info queries (query.rs) are answered here and never reach the engine.
             Ok((n, from)) if crate::query::handle(&sock, &buf[..n], from) => {}
@@ -95,6 +156,8 @@ fn recv_loop(sock: UdpSocket) {
             Ok((n, from)) if crate::nat::handle(&buf[..n], from) => {}
             // Playlist votes (vote.rs) likewise.
             Ok((n, from)) if crate::vote::handle(&sock, &buf[..n], from) => {}
+            // Scoreboard ping (ping.rs).
+            Ok((n, from)) if crate::ping::handle(&buf[..n], from) => {}
             // Campaign lobby status from a dedicated server (lobby.rs).
             Ok((n, from)) if crate::lobby::handle(&buf[..n], from) => {}
             // Wake packets for a dormant dedicated server (dormant.rs).
@@ -206,7 +269,7 @@ pub fn session_state() -> String {
 
 /// Host slot 41. Returns bytes sent, -1 unknown peer, -2 would block, -3 other error.
 pub fn send(id: u64, data: &[u8], port: u32) -> i32 {
-    let Some(net) = NET.get() else { return -1 };
+    let Some(net) = net() else { return -1 };
     let peers = net.peers.lock().unwrap();
     let addr = match peers.iter().find(|p| p.id == id) {
         // Said bye: swallow the engine's packets until its own session drops the peer.
@@ -258,7 +321,7 @@ pub fn send(id: u64, data: &[u8], port: u32) -> i32 {
 
 /// Host slot 43: next queued packet for `port`, or 0 when none.
 pub fn recv(buf: &mut [u8], id_out: &mut u64, port: u32) -> i32 {
-    let Some(net) = NET.get() else { return 0 };
+    let Some(net) = net() else { return 0 };
     let Some((id, data)) = net.queues.lock().unwrap().get_mut(&port).and_then(|q| q.pop_front()) else { return 0 };
     let n = data.len().min(buf.len());
     buf[..n].copy_from_slice(&data[..n]);
@@ -288,7 +351,7 @@ fn got_bye(net: &Net, id: u64, from: SocketAddr) {
 /// Tell every peer we are leaving (pause overlay LEAVE GAME, window closed, host shutting down). UDP may drop a
 /// datagram, so it goes out 3 times, 15 ms apart. Blocks ~30 ms; no-op without a network game.
 pub fn send_bye() {
-    let Some(net) = NET.get() else { return };
+    let Some(net) = net() else { return };
     let addrs: Vec<SocketAddr> = net.peers.lock().unwrap().iter().filter(|p| p.left.is_none()).map(|p| p.addr).collect();
     let mut pkt = Vec::with_capacity(16);
     pkt.extend_from_slice(&BYE_MAGIC);
@@ -342,33 +405,38 @@ pub unsafe fn drop_left_peers(base: usize) {
 
 /// Side channels (vote.rs): addresses of peers heard from within `max_age` (and not gone with a bye).
 pub fn active_peer_addrs(max_age: Duration) -> Vec<SocketAddr> {
-    let Some(net) = NET.get() else { return Vec::new() };
+    let Some(net) = net() else { return Vec::new() };
     let peers = net.peers.lock().unwrap();
     peers.iter().filter(|p| p.left.is_none() && p.last_seen.is_some_and(|t| t.elapsed() < max_age)).map(|p| p.addr).collect()
 }
 
 /// Client: has anything arrived from the host (peer 0) yet?
 pub fn host_heard() -> bool {
-    let Some(net) = NET.get() else { return false };
+    let Some(net) = net() else { return false };
     let peers = net.peers.lock().unwrap();
     peers.iter().any(|p| p.id == net_id(0) && p.last_seen.is_some())
 }
 
 /// Side channels: is `addr` one of our peers?
 pub fn is_peer_addr(addr: SocketAddr) -> bool {
-    NET.get().is_some_and(|n| n.peers.lock().unwrap().iter().any(|p| p.addr == addr))
+    net().is_some_and(|n| n.peers.lock().unwrap().iter().any(|p| p.addr == addr))
 }
 
 /// Side channels: the host's (instance 0's) address, as a client.
 pub fn host_addr() -> Option<SocketAddr> {
-    let net = NET.get()?;
+    let net = net()?;
     let peers = net.peers.lock().unwrap();
     peers.iter().find(|p| p.id == net_id(0)).map(|p| p.addr)
 }
 
+/// Side channels: our own network id (0 without a network game).
+pub fn my_id() -> u64 {
+    net().map_or(0, |n| n.my_id)
+}
+
 /// Side channels: one raw datagram on the game socket (no engine header).
 pub fn send_raw(addr: SocketAddr, pkt: &[u8]) {
-    if let Some(net) = NET.get() {
+    if let Some(net) = net() {
         let _ = net.sock.send_to(pkt, addr);
     }
 }

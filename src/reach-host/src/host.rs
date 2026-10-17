@@ -31,7 +31,7 @@ pub static SWAPCHAIN: AtomicUsize = AtomicUsize::new(0);
 pub static LOCAL_XUID: AtomicU64 = AtomicU64::new(0x0009_0000_0000_0001);
 
 /// Launch options handed back by slot 26 when a game ends (dedicated server: play the same map/variant again).
-pub static NEXT_GAME_OPTIONS: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+pub static NEXT_GAME_OPTIONS: std::sync::Mutex<Option<Vec<u8>>> = std::sync::Mutex::new(None);
 
 /// Dedicated server: no local user is signed in (slot 88) and no local input exists (slot 36).
 pub static DEDICATED: AtomicBool = AtomicBool::new(false);
@@ -488,7 +488,8 @@ unsafe extern "system" fn slot_get_player_profile(_this: *mut c_void, xuid: u64)
 unsafe extern "system" fn slot_get_next_game_options(_this: *mut c_void, out: *mut u8, flag: bool) -> bool {
     let n = note_override(26, "get_next_game_options");
     crate::vote::game_ended(); // playlist server: a game ended, open the vote for the next one
-    let Some(opts) = NEXT_GAME_OPTIONS.get() else {
+    let guard = NEXT_GAME_OPTIONS.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(opts) = guard.as_ref() else {
         log!("host slot 26 get_next_game_options(flag {flag}) -> false");
         return false;
     };

@@ -73,11 +73,13 @@ pub struct Graphics {
     pub quality: u8,
     /// Menu and overlay size, percent of the automatic size (fits a 1280 x 720 layout to the window).
     pub ui_scale: u32,
+    /// Main menu background: the live engine scene with the player's Spartan (preview.rs) instead of still art.
+    pub live_menu_scene: bool,
 }
 
 impl Default for Graphics {
     fn default() -> Self {
-        Graphics { display_mode: 0, window_w: 1280, window_h: 720, render_scale: 100, fps_cap: 0, vsync: true, quality: 2, ui_scale: 100 }
+        Graphics { display_mode: 0, window_w: 1280, window_h: 720, render_scale: 100, fps_cap: 0, vsync: true, quality: 2, ui_scale: 100, live_menu_scene: true }
     }
 }
 
@@ -88,11 +90,13 @@ pub struct Audio {
     pub master: f32,
     pub music: f32,
     pub sfx: f32,
+    /// Main menu music (Reach's menu theme from the player's own sfx.fsb, music.rs), 0..1; 0 = off.
+    pub menu_music: f32,
 }
 
 impl Default for Audio {
     fn default() -> Self {
-        Audio { master: 1.0, music: 1.0, sfx: 1.0 }
+        Audio { master: 1.0, music: 1.0, sfx: 1.0, menu_music: 0.6 }
     }
 }
 

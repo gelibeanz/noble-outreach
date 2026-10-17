@@ -104,6 +104,57 @@ grenade, C switch weapon, E action, Q melee, LShift ability, F grenade, LMB fire
 Tab scores, R reload, 4 flashlight, WASD). We swap C for the wheel on switch weapon: the engine reads only
 two codes per action and Reach has no "weapon 1 / weapon 2" action, so 1/2 cannot be bound.
 
+### Reach PC defaults (decoded 2026-10-17)
+Static decode of `InitDefaultKeyboardMouseBindings` + `MapMccActionToEngineAction`; the engine fills **slot 0 only**
+(slot 1 stays unbound). Mouse table values 0/2/1/3/4 = LMB/RMB/MMB/X1/X2; key values are poll indices into the list at
+0x18098fdf0 (VK → index map at 0x18098fbf0, 16-bit entries; VK 0x10 = generic Shift maps to index 105, 0x11 Ctrl to
+106). There is **no default for the wheel** (axes table only holds the look axes). `ENGINE_DEFAULT_KEYS` in
+`input.rs` mirrors this table; the settings screen resolves untouched slots through `effective_keys` (we still send
+0xFFFFFFFF for them, so engine behaviour is unchanged).
+
+| MCC | Engine | Default | Meaning |
+|---|---|---|---|
+| 0 | 0x00 | Space | Jump |
+| 1 | 0x01 | G | Switch grenade |
+| 2 | 0x03 | E | Action |
+| 3 | 0x3E | R | Reload |
+| 4 | 0x02 | C | Switch weapon (we bind the wheel) |
+| 5 | 0x04 | Q | Melee |
+| 6 | 0x16 | 4 | Flashlight |
+| 7 | 0x06 | F | Throw grenade |
+| 8 | 0x07 | Left mouse | Fire |
+| 9 | 0x08 | Left Ctrl | Crouch |
+| 10 | 0x09 | Right mouse | Zoom |
+| 11 / 12 | 0x3C / 0x3D | Z / X | not labelled yet |
+| 16-19 | 0x49-0x4C | W S A D | Move |
+| 20 | 0x3B | Tab | Scoreboard |
+| 21 / 22 | 0x0C / 0x0D | `[` / `]` | Vehicle tricks |
+| 23 | 0x05 | Left Shift | Armor ability |
+| 24 | 0x0A | Right mouse | not labelled yet |
+| 25 / 26 | 0x1E / 0x1F | R / F | Forge raise / lower |
+| 27 | 0x22 | Left mouse | Forge grab / drop |
+| 28 | 0x26 | Shift (generic) | Forge move faster |
+| 29 | 0x27 | Right Ctrl | Forge precision |
+| 30 | 0x21 | Delete | Forge delete |
+| 31 | 0x20 | 1 | Forge create objects |
+| 32 | 0x23 | 2 | Forge object properties |
+| 33 | 0x1D | `` ` `` | Forge monitor mode |
+| 34 | 0x28 | Right mouse | Forge rotate held object (inferred from the Halo 3 layout) |
+| 35 | 0x29 | Left Ctrl | Forge lock object |
+| 36 / 37 / 38 | 0x2F / 0x3F / 0x43 | X / Z / C | Theater panel / interface / view |
+| 39, 50 | 0x42, 0x31 | Right mouse | not labelled yet |
+| 40 / 41 | 0x2D / 0x2C | Right / Left arrow | Theater fast forward / rewind |
+| 42 | 0x2E | Num Enter | Theater pause / play |
+| 43 / 45 | 0x2B / 0x40 | Left Alt / Shift | not labelled yet |
+| 44 | 0x41 | Space | Theater free camera |
+| 47 / 48 | 0x44 / 0x45 | R / F | Theater camera up / down |
+| 51 / 52 / 54 | 0x2A / 0x25 / 0x24 | B / G / X | not labelled yet |
+| 58 / 61 | 0x3A / 0x46 | L / P | not labelled yet |
+| 62 / 63 | 0x0E / 0x0F | `[` / `]` | not labelled yet (pair with the vehicle tricks) |
+
+MCC actions with no default: 13-15, 46, 49, 53, 55-57, 59, 60, 64, 65 (and 46, 56, 65 map to engine actions with
+no binding). Engine-only: Esc = pause (engine 0x18), look axes 0x4D-0x50.
+
 Pad: slot 116 may return a 66-byte table (MCC action → abstract pad button 0–15: LT, RT, d-pad up, down,
 left, right, Start, Back, LS, RS, LB, RB, A, B, X, Y), applied over the engine default layout
 (`InitDefaultGamepadSettings` 0x1800d22ec); bytes ≥ 0x10 are skipped. `null` keeps the default (Reach

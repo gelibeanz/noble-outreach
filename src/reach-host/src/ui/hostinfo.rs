@@ -82,6 +82,11 @@ pub fn start(port: u16, master: Option<String>, public_addr: String) {
     });
 }
 
+/// Hosting over (seamless.rs: back to the menu in this process): no banner, no toasts.
+pub fn stop() {
+    *INFO.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
+
 /// The host's player spawned (game thread): starts the banner.
 pub fn note_spawned() {
     if let Some(i) = INFO.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {

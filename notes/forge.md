@@ -19,14 +19,22 @@ budget and object sync between machines are all the engine's. Frozen DLL, image 
 MCC action → engine action: `MapMccActionToEngineAction` 0x18003c724. Forge defaults decoded from it (MCC numbering
 as libmcc `e_game_abstract_button`):
 
-| MCC action | Engine | Default |
-|---|---|---|
-| 33 switch player mode (monitor ⇄ Spartan) | 0x1D | `~` (VK 0xC0); pad d-pad up |
-| 31 create object (place-object menu) | 0x20 | `1` |
-| 32 object tools menu | 0x23 | `2` |
-| 27 grab / drop object | 0x22 | left mouse; pad A |
-| 25 / 26 raise / lower | 0x1E / 0x1F | `R` / `F` |
-| 30 delete object | 0x21 | Delete |
+| MCC action | Engine | Settings label | Default |
+|---|---|---|---|
+| 33 | 0x1D | Monitor mode | `` ` `` |
+| 31 | 0x20 | Create objects | `1` |
+| 32 | 0x23 | Object properties | `2` |
+| 27 | 0x22 | Grab / drop object | left mouse |
+| 34 | 0x28 | Rotate held object | right mouse |
+| 25 / 26 | 0x1E / 0x1F | Raise / lower object | `R` / `F` |
+| 28 | 0x26 | Move faster | Shift |
+| 29 | 0x27 | Precision | Right Ctrl |
+| 35 | 0x29 | Lock object | Left Ctrl |
+| 30 | 0x21 | Delete object | Delete |
+
+The settings screen shows these real keys (`ENGINE_DEFAULT_KEYS`, input.rs; full table in [input.md](input.md)),
+not "Default". There is no default wheel binding in Reach. The `[6] Toggle rotation axes` prompt has no matching
+default key in the tables (6 is not bound to anything), so it is probably pad-only text.
 
 The engine's monitor HUD prints its own prompts (`[2] Tools`, `[1] Place Object`, `[6] Toggle rotation axes`,
 `[DELETE] Delete Object`). Rebinding goes through the existing profile +0x42C path (settings screen "Forge" group).

@@ -63,6 +63,7 @@ unsafe extern "system" fn paced_pump() {
     crate::lobby::tick(base); // campaign lobby gather (game thread)
     crate::vote::game_tick(base); // playlist pre-game vote holds launch state 8 (after lobby, overrides it)
     crate::net::drop_left_peers(base); // peers that said bye (game thread)
+    crate::ui::scoreboard::game_tick(); // dedicated server: its game-thread state block (scoreboard counts for RPNG)
     let pump: unsafe extern "system" fn() = std::mem::transmute(base + PUMP);
     pump();
 }

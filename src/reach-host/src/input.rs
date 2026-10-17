@@ -93,6 +93,74 @@ pub fn is_engine_default(code: u32) -> bool {
     code >= 0x100
 }
 
+/// Reach's built-in PC layout (`InitDefaultKeyboardMouseBindings` 0x1800d23e4) per MCC action, in our code space
+/// (VK / mouse 1,2,4,5,6 / WHEEL_*). The engine only fills slot 0, so slot 1 is unbound. Decoded from the three
+/// tables via `MapMccActionToEngineAction`; the full list with engine action numbers is in notes/input.md
+/// ("Reach PC defaults"). 0x10 is the generic Shift (poll index 105), not Left/Right Shift. Actions not listed
+/// have no default binding. Used by the UI only; untouched slots are still sent as `ENGINE_DEFAULT`.
+const ENGINE_DEFAULT_KEYS: &[(usize, u32)] = &[
+    (act::JUMP, 0x20),
+    (act::SWITCH_GRENADE, b'G' as u32),
+    (act::ACTION, b'E' as u32),
+    (act::RELOAD, b'R' as u32),
+    (act::SWITCH_WEAPON, b'C' as u32),
+    (act::MELEE, b'Q' as u32),
+    (act::FLASHLIGHT, b'4' as u32),
+    (act::THROW_GRENADE, b'F' as u32),
+    (act::FIRE, VK_LBUTTON),
+    (act::CROUCH, 0xA2),
+    (act::ZOOM, VK_RBUTTON),
+    (11, b'Z' as u32),
+    (12, b'X' as u32),
+    (act::MOVE_FORWARD, b'W' as u32),
+    (act::MOVE_BACK, b'S' as u32),
+    (act::STRAFE_LEFT, b'A' as u32),
+    (act::STRAFE_RIGHT, b'D' as u32),
+    (act::SCOREBOARD, 0x09),
+    (21, 0xDB), // vehicle trick 1: [
+    (22, 0xDD), // vehicle trick 2: ]
+    (act::ARMOR_ABILITY, 0xA0),
+    (24, VK_RBUTTON),
+    (25, b'R' as u32),  // Forge: raise
+    (26, b'F' as u32),  // Forge: lower
+    (27, VK_LBUTTON),   // Forge: grab / drop
+    (28, 0x10),         // Forge: move faster (Shift)
+    (29, 0xA3),         // Forge: precision (Right Ctrl)
+    (30, 0x2E),         // Forge: delete
+    (31, b'1' as u32),  // Forge: create objects
+    (32, b'2' as u32),  // Forge: object properties
+    (33, 0xC0),         // Forge: monitor mode (`)
+    (34, VK_RBUTTON),   // Forge: rotate held object
+    (35, 0xA2),         // Forge: lock object (Left Ctrl)
+    (36, b'X' as u32),  // Theater: toggle panel
+    (37, b'Z' as u32),  // Theater: toggle interface
+    (38, b'C' as u32),  // Theater: change view
+    (39, VK_RBUTTON),
+    (40, 0x27),         // Theater: fast forward (Right)
+    (41, 0x25),         // Theater: rewind (Left)
+    (42, 0x6C),         // Theater: pause / play (Num Enter)
+    (43, 0xA4),
+    (44, 0x20),         // Theater: free camera (Space)
+    (45, 0x10),
+    (47, b'R' as u32),  // Theater: camera up
+    (48, b'F' as u32),  // Theater: camera down
+    (50, VK_RBUTTON),
+    (51, b'B' as u32),
+    (52, b'G' as u32),
+    (54, b'X' as u32),
+    (58, b'L' as u32),
+    (61, b'P' as u32),
+    (62, 0xDB),
+    (63, 0xDD),
+];
+
+/// What a binding row really holds: slots still at `ENGINE_DEFAULT` resolved to the engine's real codes
+/// (slot 0 = Reach's default key, slot 1 = unbound), so the UI can show names and detect clashes.
+pub fn effective_keys(action: usize, raw: [u32; 2]) -> [u32; 2] {
+    let def = ENGINE_DEFAULT_KEYS.iter().find(|d| d.0 == action).map_or(0, |d| d.1);
+    [if is_engine_default(raw[0]) { def } else { raw[0] }, if is_engine_default(raw[1]) { 0 } else { raw[1] }]
+}
+
 /// The 0x68 virtual keys the engine polls (table at 0x18098fdf0); any other key cannot be bound.
 const POLLED_VKS: &[u8] = &[
     0x1B, 0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79, 0x7A, 0x7B, 0x7C, 0x91, 0x7E, 0xC0, 0x31, 0x32,
@@ -121,6 +189,7 @@ pub fn key_name(code: u32) -> String {
         0x08 => "Backspace",
         0x09 => "Tab",
         0x0D => "Enter",
+        0x10 => "Shift",
         0x14 => "Caps Lock",
         0x1B => "Esc",
         0x20 => "Space",
@@ -157,12 +226,12 @@ pub fn key_name(code: u32) -> String {
         0xBD => "-",
         0xBE => ".",
         0xBF => "/",
-        0xC0 => "`",
+        0xC0 => "` ~",
         0xDB => "[",
         0xDC => "\\",
         0xDD => "]",
         0xDE => "'",
-        c if is_engine_default(c) => "Default",
+        c if is_engine_default(c) => "—",
         c @ 0x30..=0x39 | c @ 0x41..=0x5A => return char::from(c as u8).to_string(),
         c @ 0x60..=0x69 => return format!("Num {}", c - 0x60),
         c @ 0x70..=0x87 => return format!("F{}", c - 0x6F),
@@ -300,6 +369,11 @@ pub fn mouse_button(bit: u32, down: bool) {
     } else {
         s.mouse_buttons &= !(1 << bit);
     }
+}
+
+/// Mouse buttons held for the game (bits as in `mouse_button`; raw input or test script). Scoreboard right-click.
+pub fn mouse_buttons() -> u32 {
+    state().mouse_buttons
 }
 
 /// Wheel delta in Windows units (120 per notch, positive = away from the user).
@@ -635,7 +709,9 @@ pub unsafe fn fill_input_state(st: *mut u8) {
     }
     f(0x114, s.wheel);
     f(0x118, 120.0);
-    (st.add(0x11C) as *mut u32).write_unaligned(s.mouse_buttons);
+    // While Tab (show scores) is held, right-click belongs to the scoreboard (mouse mode), not the engine's zoom.
+    let buttons = if crate::ui::scoreboard::held() { s.mouse_buttons & !4 } else { s.mouse_buttons };
+    (st.add(0x11C) as *mut u32).write_unaligned(buttons);
     s.dx = 0.0;
     s.dy = 0.0;
     s.wheel = 0.0;
@@ -973,6 +1049,17 @@ struct Script {
 static SCRIPT: Mutex<Option<Script>> = Mutex::new(None);
 static CAPTURE_REQ: Mutex<Option<String>> = Mutex::new(None);
 
+/// Between two games in one process (seamless.rs): no unit yet, and a test script runs again from the next spawn.
+pub fn reset_game() {
+    PLAYER0_ALIVE.store(false, Ordering::Relaxed);
+    SPAWN_UI.store(false, Ordering::Relaxed);
+    if let Some(sc) = SCRIPT.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+        sc.spawn = None;
+        sc.next = 0;
+        sc.turns.clear();
+    }
+}
+
 /// Back-buffer capture requested by the test script (file name), taken by the frame-end slot.
 pub fn take_capture_request() -> Option<String> {
     CAPTURE_REQ.lock().unwrap_or_else(|e| e.into_inner()).take()
@@ -1053,6 +1140,15 @@ fn script_set(a: &[String]) {
         "fov" => new.game.fov = n(1) as i32,
         "fps" => new.graphics.fps_cap = n(1) as u8,
         "vsync" => new.graphics.vsync = n(1) != 0,
+        // `set view <yaw> <pitch> <dist>` (preview child: orbit camera, radians / world units).
+        "view" => {
+            let f = |i: usize| a.get(i).and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0);
+            crate::preview::set_view(f(1), f(2), f(3));
+        }
+        "spot" => {
+            let f = |i: usize| a.get(i).and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0);
+            crate::preview::set_spot([f(1), f(2), f(3), f(4)]);
+        }
         // `set armour <field> <hex id>` (preview checks): helmet, primary, secondary, elite (0/1).
         "armour" => {
             let v = a.get(2).and_then(|v| u32::from_str_radix(v.trim_start_matches("0x"), 16).ok()).unwrap_or(0);
