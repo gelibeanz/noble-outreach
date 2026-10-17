@@ -440,9 +440,22 @@ pub unsafe fn init(hwnd: HWND) {
     }
 }
 
+/// The main menu is running (seamless.rs: the menu comes back in the same process after a game). A UI-close
+/// message left over from the game's pause overlay must not capture the mouse again under the menu.
+static MENU: AtomicBool = AtomicBool::new(false);
+
+/// Window thread: entering (true) or leaving the main menu. Entering frees and shows the cursor.
+pub unsafe fn set_menu(on: bool) {
+    MENU.store(on, Ordering::Relaxed);
+    if on {
+        release_all();
+        set_capture(false);
+    }
+}
+
 unsafe fn set_capture(on: bool) {
     // Not before init (focus arrives during CreateWindow), and a scripted run must not grab the desktop's mouse.
-    if on && (WINDOW.load(Ordering::Relaxed) == 0 || TEST_MODE.load(Ordering::Relaxed) || UI_ACTIVE.load(Ordering::Relaxed)) {
+    if on && (WINDOW.load(Ordering::Relaxed) == 0 || TEST_MODE.load(Ordering::Relaxed) || UI_ACTIVE.load(Ordering::Relaxed) || MENU.load(Ordering::Relaxed)) {
         return;
     }
     let hwnd = HWND(WINDOW.load(Ordering::Relaxed) as _);

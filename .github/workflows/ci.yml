@@ -22,6 +22,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install cargo-zigbuild
         run: cargo install --locked cargo-zigbuild@0.23.4
+      - name: Install windres (launcher exe icon)
+        run: sudo apt-get update && sudo apt-get install -y binutils-mingw-w64-x86-64
       - name: Test
         run: cargo test --locked -p reach-master -p reach-launcher
       - name: Build (Windows host + launcher, Linux launcher, musl master)

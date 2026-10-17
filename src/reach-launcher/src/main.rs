@@ -498,7 +498,11 @@ fn main() -> eframe::Result {
         std::env::set_var("WGPU_BACKEND", "vulkan");
     }
     let opts = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_title("Noble Outreach").with_inner_size([820.0, 600.0]).with_min_inner_size([640.0, 480.0]),
+        viewport: egui::ViewportBuilder::default()
+            .with_title("Noble Outreach")
+            .with_icon(egui::IconData { rgba: include_bytes!("../assets/icon-64.rgba").to_vec(), width: 64, height: 64 })
+            .with_inner_size([820.0, 600.0])
+            .with_min_inner_size([640.0, 480.0]),
         ..Default::default()
     };
     eframe::run_native("Noble Outreach", opts, Box::new(|cc| Ok(Box::new(App::new(cc)))))

@@ -12,4 +12,14 @@ fn main() {
         format!("{date}-{rev}")
     });
     println!("cargo:rustc-env=REACH_LAUNCHER_BUILD={v}");
+
+    // Exe icon on Windows builds (assets/icon.ico, rendered from assets/icon.svg by scripts/make-icon.sh).
+    println!("cargo:rerun-if-changed=assets/icon.ico");
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        let mut res = winresource::WindowsResource::new();
+        res.set_icon("assets/icon.ico");
+        if let Err(e) = res.compile() {
+            panic!("embedding the exe icon failed ({e}); install mingw windres (binutils-mingw-w64-x86-64)");
+        }
+    }
 }

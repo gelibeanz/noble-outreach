@@ -527,7 +527,9 @@ fn run() -> Result<(), String> {
             if menu {
                 let _ = preview::MCC.set(args.mcc.clone());
                 music::start(&args.mcc); // menu theme from the player's install; fades out below
+                input::set_menu(true); // a game before this menu may have left the mouse captured
                 let choice = ui::menu::run(hwnd, &gfx.swapchain, &gfx.context, &args.mcc);
+                input::set_menu(false);
                 music::stop();
                 preview::stop(); // the menu's preview engine is not needed in game
                 match choice {
