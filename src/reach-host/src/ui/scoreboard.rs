@@ -173,13 +173,10 @@ pub fn draw(ui: &mut egui::Ui) {
         log!("scoreboard: shown, {} players: {}", rows.len(), list.join(", "));
     }
     let full = ui.max_rect();
-    let w = 560.0;
-    let h = 110.0 + 34.0 * rows.len().max(1) as f32;
-    let r = egui::Rect::from_center_size(egui::pos2(full.center().x, full.top() + 90.0 + h / 2.0), egui::vec2(w, h));
-    theme::panel(ui, r, |ui| {
+    theme::panel_fit(ui, egui::pos2(full.center().x, full.top() + 90.0), egui::Align::Center, 560.0, |ui| {
         theme::heading(ui, "Scoreboard");
         ui.add_space(8.0);
-        let mut row = |ui: &mut egui::Ui, rank: &str, name: &str, score: &str, colour: Option<egui::Color32>, hl: bool, size: f32| {
+        let row = |ui: &mut egui::Ui, rank: &str, name: &str, score: &str, colour: Option<egui::Color32>, hl: bool, size: f32| {
             let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 30.0), egui::Sense::hover());
             if hl {
                 ui.painter().rect_filled(rect, 2.0, egui::Color32::from_rgba_unmultiplied(242, 140, 40, 40));

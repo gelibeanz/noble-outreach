@@ -84,7 +84,10 @@ through the host global, so a slot with no listed caller may still be called thr
 
 ## Not yet mapped
 
-- Slot 16 (found by the register-tracking rescan, not in host-slots-a)
+- Slot 16 = **get_next_campaign_level** `bool (this, u32* out_map_id?, u16* out_insertion?, u64* out)`. Two callers:
+  `HandleLevelCompleted` 0x1800a3314 (logs "level completed"; false/none → back to the main menu) and a next-mission
+  name lookup 0x1800a9e70 (from 0x1800aa090 / 0x1800d359c, about 14 s after every campaign map load: harmless).
+  2026-10-17: the dedicated m35 early end is NOT this slot (probes on 0x1800a3314 and game_won never hit).
 - Slot 25 (found by the register-tracking rescan, not in host-slots-a)
 - Slot 29 (found by the register-tracking rescan, not in host-slots-a)
 - Slot 34 (found by the register-tracking rescan, not in host-slots-a; other agent's range)
@@ -162,9 +165,16 @@ before the call): +0x00 u32 width (1280), +0x04 u32 height (720), +0x08..+0x0F e
 cap**: 0 → 60 fps, 1 → 120, 2 → 180, 3 → 240, 4 or other → uncapped (0x180afc094 fps, 0x180afc090 = 1/fps),
 +0x16 u8 0, +0x18..+0xB7 zero, +0xB8 a render-settings block (floats 1.0 and −1s). libmcc names the first 24 bytes
 (texture resolution/filtering, lighting, effects, details, post-processing, water, AA, motion blur, blood, vsync,
-fps lock, FSR) and +0xB8 (LOD/fade/light/shadow scales), but **Reach reads only +0x14/+0x15**: the struct is a
-stack local in `LoadHostVideoSettings` 0x18000d564 and msg 5, and nothing else touches it. Quality settings
-therefore do not exist for this engine.
+fps lock, FSR) and +0xB8 (LOD/fade/light/shadow scales). **Correction 2026-10-17:** the result lands in the global
+0x1829f5900 (defaults set by 0x1800062c9: +0x08..+0x0F = 2, +0x10..+0x13 = 1), and `ApplyQualityToRenderThrottles`
+0x18003aef8 reads +0x08..+0x12 every frame (from 0x180270258, which copies the render throttle row (scenario tag or
+built-in table 0x180b43e40, 0x50 bytes per split-screen count) into the live block 0x180ca0240). Each quality byte:
+0 low (scales x0.5, water x0.3, lights x0, and low bits set in the live flags), 1 medium (x1), 2 high (x3, lights
+x10). Byte map from the code: +0x09 anisotropy (live +0x48), +0x0A cpu/gpu lights (+0x28..+0x3C), +0x0B effect
+(+0x0C; 0 sets flag 0x10), +0x0C shadows (+0x40/+0x44; 0 sets 6), +0x0D detail: decorator/instance/object_fade/
++0x18/+0x1C/structure_lod (+0x08..+0x24), +0x0E 0 sets 0x28, +0x0F water (+0x04), +0x11 0 sets 0x400, +0x12 0 sets
+0x800. We used to zero the block → Low preset (pixelated far objects as flat imposters, checkerboard fades). Now
+Settings > Video > Graphics quality (default High). The hs globals `render_debug_*imposter*` have null storage.
 
 **Engine message 5** (`ProcessEngineMessageQueue` 0x18000f26c): calls `MarkLocalPlayerSettingsDirty`
 (0x1802a6a58, sets flag 0x400 on each local player's settings record 0x182a03c58 + i × 0xab8), then re-reads

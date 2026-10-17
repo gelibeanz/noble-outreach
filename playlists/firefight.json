@@ -9,6 +9,13 @@
     { "name": "Gruntpocalypse on Glacier",      "mode": "firefight", "map": "ff60_icecave",    "game_variant": "hr_ff_gruntpocalypse_1round.bin", "difficulty": "normal", "weight": 1 },
     { "name": "Rocketfight on Outpost",         "mode": "firefight", "map": "ff60_airview",    "game_variant": "hr_ff_rocketfight_1set.bin",      "difficulty": "normal", "weight": 1 },
     { "name": "Generator Defense on Holdout",   "mode": "firefight", "map": "ff70_holdout",    "game_variant": "hr_ff_generatorDefense_1set.bin", "difficulty": "normal", "weight": 1 },
-    { "name": "Firefight on Unearthed",         "mode": "firefight", "map": "ff_unearthed",    "game_variant": "hr_ff_standard_1set.bin",         "difficulty": "heroic", "weight": 1 }
+    { "name": "Firefight on Unearthed",         "mode": "firefight", "map": "ff_unearthed",    "game_variant": "hr_ff_standard_1set.bin",         "difficulty": "heroic", "weight": 1 },
+    { "name": "Heroic Firefight on Overlook",      "mode": "firefight", "map": "ff10_prototype",  "game_variant": "hr_ff_standard_1set.bin", "difficulty": "heroic",    "weight": 1 },
+    { "name": "Heroic Firefight on Waterfront",    "mode": "firefight", "map": "ff30_waterfront", "game_variant": "hr_ff_standard_1set.bin", "difficulty": "heroic",    "weight": 1 },
+    { "name": "Heroic Firefight on Beachhead",     "mode": "firefight", "map": "ff50_park",       "game_variant": "hr_ff_standard_1set.bin", "difficulty": "heroic",    "weight": 1 },
+    { "name": "Legendary Firefight on Overlook",   "mode": "firefight", "map": "ff10_prototype",  "game_variant": "hr_ff_standard_1set.bin", "difficulty": "legendary", "weight": 1 },
+    { "name": "Legendary Firefight on Courtyard",  "mode": "firefight", "map": "ff20_courtyard",  "game_variant": "hr_ff_standard_1set.bin", "difficulty": "legendary", "weight": 1 },
+    { "name": "Legendary Firefight on Corvette",   "mode": "firefight", "map": "ff45_corvette",   "game_variant": "hr_ff_standard_1set.bin", "difficulty": "legendary", "weight": 1 },
+    { "name": "Legendary Firefight on Holdout",    "mode": "firefight", "map": "ff70_holdout",    "game_variant": "hr_ff_standard_1set.bin", "difficulty": "legendary", "weight": 1 }
   ]
 }

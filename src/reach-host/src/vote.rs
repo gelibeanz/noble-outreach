@@ -20,6 +20,7 @@ pub const VERSION: u8 = 1;
 const KIND_OPEN: u8 = 1; // server -> clients: options, seconds left, tally (repeated every second)
 const KIND_CAST: u8 = 2; // client -> server: my choice
 const KIND_RESULT: u8 = 3; // server -> clients: winner, and whether the server restarts into it
+const KIND_CALL: u8 = 4; // client -> server: open a vote now (pause menu VOTE FOR A NEW GAME)
 /// Choice index of "None of the above".
 pub const NONE: u8 = 3;
 
@@ -40,6 +41,8 @@ pub struct OpenMsg {
     pub id: u16,
     pub secs_left: u8,
     pub none_allowed: bool,
+    /// Choice 4 is "Keep playing this game" (a vote called mid-game), not "None of the above". Flags byte bit 1.
+    pub keep: bool,
     pub voters: u8,
     pub tally: [u8; 4],
     pub playlist: String,
@@ -104,7 +107,7 @@ fn get_opt(r: &mut Rd) -> Option<Opt> {
 
 pub fn encode_open(m: &OpenMsg) -> Vec<u8> {
     let mut o = header(KIND_OPEN, m.id);
-    o.extend_from_slice(&[m.secs_left, m.options.len() as u8, m.none_allowed as u8, m.voters]);
+    o.extend_from_slice(&[m.secs_left, m.options.len() as u8, m.none_allowed as u8 | (m.keep as u8) << 1, m.voters]);
     o.extend_from_slice(&m.tally);
     put_str(&mut o, &m.playlist, 48);
     for p in &m.options {
@@ -117,12 +120,13 @@ fn decode_open(p: &[u8]) -> Option<OpenMsg> {
     let mut r = Rd(p, 8);
     let secs_left = r.u8()?;
     let n = r.u8()?.min(3) as usize;
-    let none_allowed = r.u8()? & 1 != 0;
+    let flags = r.u8()?;
+    let (none_allowed, keep) = (flags & 1 != 0, flags & 2 != 0);
     let voters = r.u8()?;
     let tally = [r.u8()?, r.u8()?, r.u8()?, r.u8()?];
     let playlist = r.str()?;
     let options = (0..n).map(|_| get_opt(&mut r)).collect::<Option<Vec<_>>>()?;
-    Some(OpenMsg { id: u16::from_le_bytes([p[6], p[7]]), secs_left, none_allowed, voters, tally, playlist, options })
+    Some(OpenMsg { id: u16::from_le_bytes([p[6], p[7]]), secs_left, none_allowed, keep, voters, tally, playlist, options })
 }
 
 pub fn encode_cast(id: u16, choice: u8) -> Vec<u8> {
@@ -164,6 +168,8 @@ fn difficulty_byte(s: Option<&str>) -> u8 {
 enum Reason {
     PreGame,
     GameEnd,
+    /// A player asked for one mid-game (pause menu); the current game is not among the options.
+    Called,
 }
 
 struct Round {
@@ -187,7 +193,7 @@ struct Server {
 
 static SERVER: Mutex<Server> = Mutex::new(Server { round: None, next_id: 1, result: None });
 static IS_SERVER: AtomicBool = AtomicBool::new(false);
-/// Open request from the game thread / slot 26: 0 none, 1 pre-game, 2 game end.
+/// Open request from the game thread / slot 26 / a player: 0 none, 1 pre-game, 2 game end, 3 called.
 static OPEN_REQ: AtomicU8 = AtomicU8::new(0);
 /// Pre-game vote: 0 not started (hold state 8 once a player is in), 1 running (hold), 2 done (release).
 static PREGAME: AtomicU8 = AtomicU8::new(0);
@@ -264,7 +270,7 @@ fn open_round(s: &mut Server, reason: Reason, none_allowed: bool, exclude: &[usi
     s.next_id = s.next_id.wrapping_add(1).max(1);
     let secs = SECS.load(Ordering::Relaxed);
     let list: Vec<String> = options.iter().enumerate().map(|(k, &i)| format!("{} \"{}\"", k + 1, p.entries[i].name)).collect();
-    log!("vote: round {id} open ({}): {}{}, {secs} s", if reason == Reason::PreGame { "pre-game" } else { "game over" }, list.join(", "), if none_allowed { ", 4 none of the above" } else { "" });
+    log!("vote: round {id} open ({}): {}{}, {secs} s", match reason { Reason::PreGame => "pre-game", Reason::GameEnd => "game over", Reason::Called => "called by a player" }, list.join(", "), if none_allowed { ", 4 none of the above" } else { "" });
     s.round = Some(Round { id, reason, options, none_allowed, deadline: Instant::now() + Duration::from_secs(secs as u64), votes: HashMap::new(), last_send: None, early: false });
 }
 
@@ -281,6 +287,7 @@ fn open_msg(r: &Round, voters: usize) -> OpenMsg {
         id: r.id,
         secs_left: r.deadline.saturating_duration_since(Instant::now()).as_secs_f32().ceil().min(255.0) as u8,
         none_allowed: r.none_allowed,
+        keep: r.reason == Reason::Called,
         voters: voters.min(255) as u8,
         tally: tally(r),
         playlist: playlist::get().map(|p| p.name.clone()).unwrap_or_default(),
@@ -294,6 +301,27 @@ fn broadcast(pkt: &[u8]) -> usize {
         crate::net::send_raw(*a, pkt);
     }
     peers.len()
+}
+
+/// Listen host, campaign mission over (mission.rs): tell the joiners to follow into `map`, as a vote restart does
+/// (RESULT with restart set, sent 3 times over ~1 s). Returns how many peers were told.
+pub fn announce_next_mission(map: &str, name: &str, difficulty: &str) -> usize {
+    let msg = ResultMsg {
+        id: 0x8000 | (map.bytes().fold(0u16, |h, b| h.wrapping_mul(31).wrapping_add(b as u16)) & 0x7fff),
+        winner: 0,
+        restart: true,
+        difficulty: difficulty_byte(Some(difficulty)),
+        opt: Opt { mode: crate::query::MODE_CAMPAIGN, name: name.into(), map: map.into(), game_variant: String::new() },
+    };
+    let pkt = encode_result(&msg);
+    let n = broadcast(&pkt);
+    std::thread::spawn(move || {
+        for _ in 0..2 {
+            std::thread::sleep(Duration::from_millis(400));
+            broadcast(&pkt);
+        }
+    });
+    n
 }
 
 /// Main thread, every ~10 ms on a dedicated server.
@@ -328,6 +356,10 @@ pub fn tick() {
         match req {
             1 => open_round(&mut s, Reason::PreGame, true, &[]),
             2 => open_round(&mut s, Reason::GameEnd, true, &[]),
+            3 => {
+                let cur = playlist::get().unwrap().current;
+                open_round(&mut s, Reason::Called, true, &[cur]);
+            }
             _ => return,
         }
     }
@@ -371,6 +403,15 @@ fn decide(s: &mut Server) {
         tied[(playlist::rand_u64() % tied.len() as u64) as usize]
     };
     log!("vote: round {} closed, tally {}/{}/{}/{} ({} vote(s)){}", r.id, t[0], t[1], t[2], t[3], total, if total == 0 { ", no votes: random option" } else { "" });
+    if r.reason == Reason::Called && (pick == NONE || total == 0) {
+        // Called mid-game: "Keep playing" won, or nobody voted: carry on, never a random map.
+        let p = playlist::get().unwrap();
+        let e = p.current;
+        log!("vote: round {}: {}; keeping \"{}\"", r.id, if total == 0 { "no votes" } else { "keep playing won" }, p.entries[e].name);
+        let msg = ResultMsg { id: r.id, winner: NONE, restart: false, difficulty: difficulty_byte(p.entries[e].difficulty.as_deref()), opt: opt_of(e) };
+        s.result = Some((msg, 3, Instant::now(), None));
+        return;
+    }
     if pick == NONE {
         log!("vote: \"none of the above\" won, re-rolling once");
         let exclude = r.options.clone();
@@ -432,12 +473,45 @@ pub fn view() -> Option<View> {
     let v = CLIENT.lock().unwrap().clone();
     let open = v.open_at.is_some_and(|t| t.elapsed() < Duration::from_secs(3));
     let res = v.result.as_ref().is_some_and(|(_, t)| t.elapsed() < Duration::from_secs(10)) || FOLLOWING.load(Ordering::Relaxed);
-    (open || res).then_some(v)
+    (open || res || call_notice().is_some()).then_some(v)
 }
 
 /// Client: a vote restart is being followed (main.rs must not return to the menu meanwhile).
 pub fn following() -> bool {
     FOLLOWING.load(Ordering::Relaxed)
+}
+
+/// Client: when this player last asked the server for a vote (pause menu).
+static CALLED_AT: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// Client joined to a server (not hosting): the pause menu offers VOTE FOR A NEW GAME.
+pub fn can_call() -> bool {
+    !IS_SERVER.load(Ordering::Relaxed) && crate::net::host_addr().is_some()
+}
+
+/// Client: ask the server to open a vote now. A server without a playlist (or an older one) ignores it;
+/// `call_notice` then says so.
+pub fn call() {
+    if let Some(h) = crate::net::host_addr() {
+        crate::net::send_raw(h, &header(KIND_CALL, 0));
+        *CALLED_AT.lock().unwrap() = Some(Instant::now());
+        log!("vote: asked the server for a vote");
+    }
+}
+
+/// Client: text for a short notice after `call` (None = nothing to say).
+pub fn call_notice() -> Option<&'static str> {
+    let at = (*CALLED_AT.lock().unwrap())?;
+    let v = CLIENT.lock().unwrap();
+    let answered = v.round_at.is_some_and(|r| r >= at) || v.result.as_ref().is_some_and(|(_, r)| *r >= at);
+    let e = at.elapsed();
+    if answered || e > Duration::from_secs(9) {
+        None
+    } else if e < Duration::from_secs(3) {
+        Some("Asking the server for a vote ...")
+    } else {
+        Some("No vote: this server has no playlist voting, or a vote just ran")
+    }
 }
 
 /// Client: vote for option `choice` (0..2, 3 = none of the above). False if no vote is open or it is not offered.
@@ -468,6 +542,11 @@ pub fn handle(_sock: &UdpSocket, pkt: &[u8], from: SocketAddr) -> bool {
     if IS_SERVER.load(Ordering::Relaxed) {
         if pkt[5] == KIND_CAST {
             record_cast(pkt, from);
+        } else if pkt[5] == KIND_CALL && crate::net::is_peer_addr(from) {
+            // Ignored while a round or its result is running (tick only opens when there is none).
+            if OPEN_REQ.compare_exchange(0, 3, Ordering::Relaxed, Ordering::Relaxed).is_ok() {
+                log!("vote: {from} asked for a vote");
+            }
         }
         return true;
     }
@@ -521,11 +600,15 @@ pub fn handle(_sock: &UdpSocket, pkt: &[u8], from: SocketAddr) -> bool {
     true
 }
 
+/// Arguments this process's game was launched with. A game started from the menu runs in the same process with the
+/// menu's join/host flags appended, so the process arguments alone would relaunch into a local game (main.rs sets it).
+pub static LAUNCH_ARGS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+
 /// Client: the server restarts into `m`. Wait until it answers the info query with the new map and variant, then
 /// relaunch this exe with the new mode flags (same identity, bind and peer) and exit.
 fn follow(m: ResultMsg) {
     let Some(host) = crate::net::host_addr() else { return };
-    let argv: Vec<String> = std::env::args().skip(1).collect();
+    let argv: Vec<String> = LAUNCH_ARGS.get().cloned().unwrap_or_else(|| std::env::args().skip(1).collect());
     let mcc = argv.iter().position(|a| a == "--mcc").and_then(|i| argv.get(i + 1)).map(std::path::PathBuf::from)
         .or_else(|| std::env::var_os("MCC_PATH").map(Into::into)).unwrap_or_default();
     // --join-server picks the map from the master listing again; otherwise swap the mode flags.
@@ -569,18 +652,31 @@ fn follow(m: ResultMsg) {
         Ok(c) => log!("vote: relaunched as process {} with {}", c.id(), new_argv.join(" ")),
         Err(e) => log!("vote: could not relaunch {}: {e}", exe.display()),
     }
+    // Not process::exit: its engine/DLL teardown can hang under Wine, leaving this game's window open next to the
+    // relaunched one. Nothing here needs flushing (the log is written per line).
+    unsafe {
+        use windows::Win32::System::Threading::{GetCurrentProcess, TerminateProcess};
+        let _ = TerminateProcess(GetCurrentProcess(), 0);
+    }
     std::process::exit(0);
 }
 
 /// Start of a process relaunched by `follow`: wait (up to 10 s) for the old one to exit so its UDP port is free.
 pub fn await_previous() {
-    use windows::Win32::System::Threading::{OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE};
+    use windows::Win32::System::Threading::{OpenProcess, TerminateProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE};
     let Some(pid) = std::env::var("REACH_VOTE_PREV_PID").ok().and_then(|v| v.parse::<u32>().ok()) else { return };
     std::env::remove_var("REACH_VOTE_PREV_PID");
     unsafe {
-        if let Ok(h) = OpenProcess(PROCESS_SYNCHRONIZE, false, pid) {
+        if let Ok(h) = OpenProcess(PROCESS_SYNCHRONIZE | PROCESS_TERMINATE, false, pid) {
             let r = WaitForSingleObject(h, 10_000);
-            log!("vote: previous process {pid} {}", if r.0 == 0 { "exited" } else { "still running after 10 s" });
+            if r.0 == 0 {
+                log!("vote: previous process {pid} exited");
+            } else {
+                // Stuck in its exit: end it, or its window stays open next to ours.
+                let k = TerminateProcess(h, 0);
+                let gone = WaitForSingleObject(h, 3_000).0 == 0;
+                log!("vote: previous process {pid} still running after 10 s; terminated ({k:?}, gone {gone})");
+            }
             let _ = windows::Win32::Foundation::CloseHandle(h);
         }
     }
@@ -596,12 +692,14 @@ mod tests {
             id: 7,
             secs_left: 12,
             none_allowed: true,
+            keep: true,
             voters: 2,
             tally: [0, 2, 0, 1],
             playlist: "Slayer".into(),
             options: vec![Opt { mode: 0, name: "A".into(), map: "forge_world".into(), game_variant: "slayer_054.bin".into() }; 3],
         };
         let d = decode_open(&encode_open(&o)).unwrap();
+        assert!(d.keep && d.none_allowed);
         assert_eq!((d.id, d.secs_left, d.none_allowed, d.voters, d.tally, d.options.len()), (7, 12, true, 2, [0, 2, 0, 1], 3));
         assert_eq!(d.options[2], o.options[2]);
         let r = ResultMsg { id: 7, winner: 1, restart: true, difficulty: 2, opt: o.options[0].clone() };

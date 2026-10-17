@@ -69,11 +69,15 @@ pub struct Graphics {
     pub fps_cap: u8,
     /// Slot 32 +0x14 (the engine's Present sync interval).
     pub vsync: bool,
+    /// Graphics quality for every slot-32 quality byte: 0 low, 1 medium, 2 high (detail distances x0.5 / x1 / x3).
+    pub quality: u8,
+    /// Menu and overlay size, percent of the automatic size (fits a 1280 x 720 layout to the window).
+    pub ui_scale: u32,
 }
 
 impl Default for Graphics {
     fn default() -> Self {
-        Graphics { display_mode: 0, window_w: 1280, window_h: 720, render_scale: 100, fps_cap: 0, vsync: true }
+        Graphics { display_mode: 0, window_w: 1280, window_h: 720, render_scale: 100, fps_cap: 0, vsync: true, quality: 2, ui_scale: 100 }
     }
 }
 

@@ -10,6 +10,7 @@ mod forge;
 mod host;
 mod input;
 mod lobby;
+mod mission;
 mod log;
 mod nat;
 mod net;
@@ -447,7 +448,9 @@ fn run() -> Result<(), String> {
     log!("mcc dir: {}", args.mcc.display());
     // No launch arguments: show the main menu first (ui/menu.rs); it hands back the arguments of the chosen game.
     let menu = args.options.is_none() && !args.build.wanted() && args.net.is_none() && !args.no_launch && !args.hidden && !args.dedicated();
-    let mut from_menu = false;
+    // REACH_FROM_MENU: a game started from the menu, also after mission.rs relaunched it into the next mission (it
+    // returns to the menu at the end like the first one).
+    let mut from_menu = std::env::var_os("REACH_FROM_MENU").is_some();
     let player = ui::settings::get();
     if !argv.iter().any(|a| a == "--mouse-sens") {
         input::set_mouse_sens(player.mouse_sens as f64);
@@ -494,11 +497,21 @@ fn run() -> Result<(), String> {
                 ui::menu::Choice::Launch(extra) => {
                     argv.extend(extra);
                     args = parse_args(&argv)?;
+                    let _ = vote::LAUNCH_ARGS.set(argv.clone()); // a vote restart relaunches with the menu's flags
                     from_menu = true;
+                    std::env::set_var("REACH_FROM_MENU", "1");
                     if std::env::var_os("REACH_NAME").is_none() {
                         std::env::set_var("REACH_NAME", &ui::settings::get().player_name); // read by slot 88
                     }
                 }
+            }
+        }
+
+        // Solo or hosted campaign from the menu: roll on into the next mission when this one ends (mission.rs).
+        if from_menu && !args.dedicated() && matches!(args.build.mode, options::Mode::Campaign { .. }) && args.net.as_ref().is_none_or(|n| n.instance == 0) {
+            if let Some(map) = &args.build.map {
+                let difficulty = ["easy", "normal", "heroic", "legendary"][args.build.difficulty.clamp(0, 3) as usize];
+                let _ = mission::CURRENT.set((map.clone(), difficulty.into(), args.mcc.clone()));
             }
         }
 
@@ -645,6 +658,7 @@ fn run() -> Result<(), String> {
         }
         let mut cpu = CpuLog::new();
         let mut msg = MSG::default();
+        let join_t0 = std::time::Instant::now();
         loop {
             while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
                 if msg.message == WM_QUIT {
@@ -671,6 +685,18 @@ fn run() -> Result<(), String> {
                     log!("dedicated: engine stopped; exiting with code 3 so the supervisor restarts the server");
                     std::process::exit(3);
                 }
+                if let Some(next) = mission::relaunch_args(&argv) {
+                    // Mission over: the next one in a fresh process (mission.rs), once this one has freed its port.
+                    let exe = std::env::current_exe().unwrap_or_default();
+                    let _ = std::fs::copy(exe.with_file_name("reach-host.log"), exe.with_file_name("reach-host-game.log"));
+                    match std::process::Command::new(&exe).args(&next).env("REACH_VOTE_PREV_PID", std::process::id().to_string()).spawn() {
+                        Ok(c) => {
+                            log!("mission: next mission in process {} with {}", c.id(), next.join(" "));
+                            ui::hard_exit(0);
+                        }
+                        Err(e) => log!("mission: could not start the next mission: {e}"),
+                    }
+                }
                 if (from_menu || ui::overlay::leave_requested().is_some()) && !vote::following() {
                     ui::relaunch_to_menu(&args.mcc);
                 }
@@ -682,6 +708,13 @@ fn run() -> Result<(), String> {
                 net::send_bye();
                 log!("leave game: returning to the menu");
                 ui::relaunch_to_menu(&args.mcc);
+            }
+            // Joiner that never heard from the host (unreachable address, carrier-grade NAT, firewall): back to the
+            // menu with a reason instead of a black screen forever.
+            if args.net.as_ref().is_some_and(|n| n.instance != 0) && !net::host_heard() && join_t0.elapsed().as_secs() >= 20 && !vote::following() {
+                log!("join: no answer from the host in 20 s; returning to the menu");
+                net::send_bye();
+                ui::relaunch_to_menu_with(&args.mcc, Some("Could not reach the host. If they host from home behind carrier-grade NAT (CGNAT), nobody can reach them: let another player host, or play on a server."));
             }
             if net::HOST_LEFT.load(std::sync::atomic::Ordering::Relaxed) && !vote::following() {
                 log!("host left the game: returning to the menu");
@@ -909,6 +942,12 @@ fn exe_dir() -> PathBuf {
 }
 
 fn main() {
+    // Per-monitor DPI aware before any window exists: otherwise Windows with display scaling above 100 % gives the
+    // game a smaller window and stretches it up (blurry, low-detail picture). Wine ignores scaling, so it never showed.
+    unsafe {
+        use windows::Win32::UI::HiDpi::{SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2};
+        let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    }
     let argv: Vec<String> = std::env::args().collect();
     if let Some(i) = argv.iter().position(|a| a == "--browse") {
         // No engine, no log file: just list the servers.

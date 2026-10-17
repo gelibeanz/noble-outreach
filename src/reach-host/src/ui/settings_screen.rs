@@ -76,6 +76,7 @@ const ALL_CATS: [Cat; 6] = [Cat::Graphics, Cat::Audio, Cat::Game, Cat::Player, C
 
 const WINDOW_SIZES: &[(u32, u32)] = &[(1280, 720), (1366, 768), (1600, 900), (1920, 1080), (2560, 1440), (3840, 2160)];
 const RENDER_SCALES: &[u32] = &[50, 67, 75, 85, 100, 125, 150, 200];
+const UI_SCALES: &[u32] = &[60, 70, 80, 90, 100, 110, 125];
 const FPS_CAPS: &[&str] = &["60 fps", "120 fps", "180 fps", "240 fps", "No limit"];
 /// Profile +0x1C8 values the engine accepts for Reach (others fall back to the default layout), named after the
 /// engine's internal preset ids.
@@ -609,11 +610,27 @@ impl SettingsScreen {
             *v = lo + t * (hi - lo);
             moved = true;
         }
-        if focused && self.keys.left {
+        // Value box: shows the value; click it and type an exact one (Enter or clicking away applies it).
+        let box_r = Rect::from_min_max(egui::pos2(ctrl.right() - 70.0, ctrl.center().y - 14.0), egui::pos2(ctrl.right(), ctrl.center().y + 14.0));
+        let txt_id = resp.id.with("txt");
+        let editing = ui.memory(|m| m.has_focus(txt_id));
+        let mut text = if editing { ui.data_mut(|d| d.get_temp::<String>(txt_id)).unwrap_or_else(|| fmt(*v)) } else { fmt(*v) };
+        let te = ui.put(box_r, egui::TextEdit::singleline(&mut text).id(txt_id).font(FontId::proportional(16.5)).horizontal_align(egui::Align::Max).char_limit(8));
+        if te.has_focus() {
+            ui.data_mut(|d| d.insert_temp(txt_id, text.clone()));
+        }
+        if te.lost_focus() {
+            if let Ok(n) = text.trim().replace(',', ".").parse::<f32>() {
+                *v = n.clamp(lo, hi);
+            }
+            ui.data_mut(|d| d.remove::<String>(txt_id));
+        }
+        let typing = te.has_focus();
+        if focused && !typing && self.keys.left {
             *v -= step;
             moved = true;
         }
-        if focused && self.keys.right {
+        if focused && !typing && self.keys.right {
             *v += step;
             moved = true;
         }
@@ -631,7 +648,6 @@ impl SettingsScreen {
         p.line_segment([egui::pos2(track.left(), y), egui::pos2(x, y)], Stroke::new(4.0, ACCENT.gamma_multiply(0.85)));
         let knob = Rect::from_center_size(egui::pos2(x, y), Vec2::new(10.0, 22.0));
         p.rect_filled(knob, 2.0, if hit.hovered() || hit.dragged() || focused { Color32::WHITE } else { Color32::from_rgb(200, 205, 212) });
-        p.text(egui::pos2(ctrl.right(), y), Align2::RIGHT_CENTER, fmt(*v), FontId::proportional(16.5), TEXT);
         *v != old
     }
 
@@ -726,6 +742,11 @@ impl SettingsScreen {
         if self.picker(ui, "Rendering resolution", "The resolution the game draws at, as a share of the window. Lower is faster and softer; above 100 % draws more pixels than the screen has and scales them down, for a sharper picture.", &names, &mut ri, true) {
             g.render_scale = RENDER_SCALES[ri];
         }
+        let mut ui_i = UI_SCALES.iter().position(|s| *s == g.ui_scale).unwrap_or(4);
+        let names: Vec<String> = UI_SCALES.iter().map(|p| if *p == 100 { "100 % (automatic)".to_string() } else { format!("{p} %") }).collect();
+        if self.picker(ui, "Menu size", "Size of the menus and in-game panels. Pick a smaller size if a screen does not fit your window.", &names, &mut ui_i, true) {
+            g.ui_scale = UI_SCALES[ui_i];
+        }
         let mut fi = g.fps_cap.min(4) as usize;
         let caps: Vec<String> = FPS_CAPS.iter().map(|s| s.to_string()).collect();
         if self.picker(ui, "Frame-rate limit", "The most frames the game draws each second. The engine offers 60, 120, 180 and 240, or no limit. Applies straight away.", &caps, &mut fi, true) {
@@ -738,7 +759,12 @@ impl SettingsScreen {
         self.s.graphics = g.clone();
 
         self.section(ui, "Quality");
-        self.note(ui, "The Reach engine only takes VSync and the frame-rate limit from its host. Texture, shadow, lighting and effects quality are fixed at the game's own level, so there is nothing to tune here.");
+        let mut qi = g.quality.min(2) as usize;
+        let levels = ["Low", "Medium", "High"].map(String::from);
+        if self.picker(ui, "Graphics quality", "Detail distance, lights, shadows, effects, water and texture filtering, like MCC's own preset. High draws full-detail objects much further away; Low is the old Xbox-like look and the fastest.", &levels, &mut qi, true) {
+            g.quality = qi as u8;
+        }
+        self.s.graphics = g.clone();
     }
 
     fn audio(&mut self, ui: &mut Ui) {

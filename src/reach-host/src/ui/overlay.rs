@@ -43,6 +43,12 @@ static STATE: Mutex<State> = Mutex::new(State { page: Page::Main, settings: None
 /// Host slot 7 (`pause_game(u32 controller)`): the engine's pause action (Esc / Start) fired.
 pub unsafe extern "system" fn slot_pause_game(_this: *mut c_void, controller: u32) {
     log!("host slot 7 pause_game(controller {controller}) -> pause overlay");
+    open();
+}
+
+/// Open the pause overlay. Also from input.rs: Esc while joining (black screen, the engine does not pause yet), so
+/// LEAVE GAME is always reachable.
+pub fn open() {
     if crate::host::DEDICATED.load(Ordering::Relaxed) || LEAVE_AT.lock().unwrap_or_else(|e| e.into_inner()).is_some() {
         return;
     }
@@ -145,7 +151,7 @@ unsafe fn passive_frame(swapchain: *mut c_void) {
     }
     let vote = super::vote::current();
     let nat = crate::nat::client_status(); // joiner: "Connected to the host (NAT punch)" etc.
-    let lobby = crate::lobby::waiting_view(); // listen campaign host gathering friends
+    let lobby = crate::lobby::waiting_view(); // campaign lobby gathering (listen host, or joined to a dedicated server)
     let forge_saved = crate::forge::last_status().is_some(); // "Saved '<name>'" toast after a Forge save
     if banner <= 0.0 && toast.is_none() && !scores && vote.is_none() && nat.is_none() && lobby.is_none() && !forge_saved {
         return;
@@ -169,8 +175,8 @@ unsafe fn passive_frame(swapchain: *mut c_void) {
         if let Some((text, a)) = &nat {
             nat_status(ui, text, *a);
         }
-        if let Some((n, max, secs)) = lobby {
-            super::campaign::lobby_panel(ui, n, max, secs);
+        if let Some((n, max, secs, host)) = lobby {
+            super::campaign::lobby_panel(ui, n, max, secs, host);
         }
         if forge_saved {
             super::forge::save_toast(ui);
@@ -238,7 +244,8 @@ fn draw_ui(ui: &mut egui::Ui, st: &mut State) {
         }
         return;
     }
-    let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
+    // The Esc that opened the overlay (input.rs, while joining) reaches egui too: ignore Esc for the first frames.
+    let esc = FRAMES.load(Ordering::Relaxed) >= 15 && ui.input(|i| i.key_pressed(egui::Key::Escape));
     let leaving = leave_requested().is_some();
     let left = Rect::from_min_size(full.min + Vec2::new(48.0, 48.0), Vec2::new(340.0, full.height() - 96.0));
     theme::panel(ui, left, |ui| {
@@ -253,6 +260,11 @@ fn draw_ui(ui: &mut egui::Ui, st: &mut State) {
         }
         if theme::nav_item(ui, "Settings", st.page == Page::Settings).clicked() {
             st.page = Page::Settings;
+        }
+        // Joined to a server: ask it for a playlist vote now (the panel shows once the pause menu closes).
+        if crate::vote::can_call() && theme::nav_item(ui, "Vote for a new game", false).clicked() {
+            crate::vote::call();
+            close();
         }
         ui.add_space(14.0);
         if theme::nav_item(ui, "Leave game", false).clicked() {

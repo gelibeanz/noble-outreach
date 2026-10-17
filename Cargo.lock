@@ -2425,7 +2425,7 @@ dependencies = [
 
 [[package]]
 name = "reach-host"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "egui 0.35.0",
  "egui-directx11",
@@ -2439,7 +2439,7 @@ dependencies = [
 
 [[package]]
 name = "reach-launcher"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "dirs",
  "eframe",
@@ -2452,7 +2452,7 @@ dependencies = [
 
 [[package]]
 name = "reach-master"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "axum",
  "serde",
@@ -2464,7 +2464,7 @@ dependencies = [
 
 [[package]]
 name = "reach-tracer"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "windows-sys 0.59.0",
 ]

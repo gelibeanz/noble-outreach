@@ -52,7 +52,7 @@ pub fn apply(old: &Settings, new: &Settings) {
         return;
     }
     let profile = (&old.game, &old.audio, &old.pad, &old.mouse, &old.armour) != (&new.game, &new.audio, &new.pad, &new.mouse, &new.armour);
-    let video = (old.graphics.vsync, old.graphics.fps_cap) != (new.graphics.vsync, new.graphics.fps_cap);
+    let video = (old.graphics.vsync, old.graphics.fps_cap, old.graphics.quality) != (new.graphics.vsync, new.graphics.fps_cap, new.graphics.quality);
     if profile {
         let p = crate::host::profile_ptr();
         unsafe {

@@ -50,6 +50,9 @@ const RVA_OBSERVER_DIRECTOR_VTABLE: usize = 0xa2df08;
 /// Unit handle the orbit camera was installed for (respawns get a new unit and need a fresh install).
 static ORBIT_UNIT: AtomicU32 = AtomicU32::new(u32::MAX);
 static SPAWN_TICKS: AtomicU32 = AtomicU32::new(0);
+/// Species of the current biped (1 = Elite) and the unit last killed for a species change (once per biped).
+static BIPED_ELITE: AtomicU32 = AtomicU32::new(0);
+static KILLED_UNIT: AtomicU32 = AtomicU32::new(u32::MAX);
 
 unsafe fn director0() -> Option<*mut u8> {
     let base = crate::crash::ENGINE_BASE.load(Ordering::Relaxed);
@@ -86,7 +89,12 @@ pub unsafe fn game_tick() {
     }
     let Some(dir) = director0() else { return };
     let base = crate::crash::ENGINE_BASE.load(Ordering::Relaxed);
+    let want_elite = *crate::host::profile_ptr().add(0x38) as u32;
     if ORBIT_UNIT.load(Ordering::Relaxed) != v.unit {
+        if SPAWN_TICKS.load(Ordering::Relaxed) == 0 {
+            // The species is fixed when the biped is made, from the look applied (profile + msg 5) by then.
+            BIPED_ELITE.store(want_elite, Ordering::Relaxed);
+        }
         // Give the spawn a few ticks to settle (the game director sets itself up on the new unit first).
         if SPAWN_TICKS.fetch_add(1, Ordering::Relaxed) < 10 {
             return;
@@ -103,10 +111,21 @@ pub unsafe fn game_tick() {
         // Transition time travels in xmm2 (third argument), r9b = force (as the engine's own director restore).
         let ok = set_mode(dir, 1, 0.0, 0);
         log!("preview: orbit camera on unit {:#x} (facing {:.2} rad), set_mode -> {ok}", v.unit, v.yaw);
-        LIVE_AT.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(std::time::Instant::now);
+        // Frames resume 400 ms after the (re)install; the menu kept the last good one meanwhile.
+        *LIVE_AT.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now());
         let mut quiet = crate::ui::settings::get().audio;
         quiet.master = 0.0;
         crate::audio::apply_volume(&quiet); // the menu has its own sound; the preview stays silent
+    }
+    if want_elite != BIPED_ELITE.load(Ordering::Relaxed) && KILLED_UNIT.swap(v.unit, Ordering::Relaxed) != v.unit {
+        // Spartan <-> Elite needs a new biped: respawn (Slayer respawns in ~5 s). Stop publishing frames so the
+        // menu shows the last model under "switching" instead of the death camera and the loadout picker.
+        *LIVE_AT.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        if let Some(h) = header() {
+            h.add(4).write_volatile(STATE_SWITCHING);
+        }
+        hs("(unit_kill_silent (player_get 0))");
+        return;
     }
     // Orbiting camera (director +8): +0x18 yaw, +0x1C pitch, +0x20 distance (the camera clamps it to the target's
     // size), looking at the target from that angle. The observer director copies its +0x198 / +0x19C into the
@@ -178,8 +197,9 @@ const MAX_W: u32 = 1024;
 const MAX_H: u32 = 1024;
 const BUF_BYTES: usize = (MAX_W * MAX_H * 4) as usize;
 const MAP_BYTES: usize = HEADER + 2 * BUF_BYTES;
-/// Header state: 0 starting, 1 live (orbit camera on the biped).
+/// Header state: 0 starting, 1 live (orbit camera on the biped), 2 switching species (respawning, no frames).
 const STATE_LIVE: u32 = 1;
+const STATE_SWITCHING: u32 = 2;
 
 static SHARED: AtomicUsize = AtomicUsize::new(0);
 static LIVE_AT: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
@@ -265,21 +285,18 @@ fn start_stdin_reader() {
     });
 }
 
-/// Child, game thread: apply queued armour (profile + engine msg 5; Spartan/Elite needs a respawn) and commands.
+/// Child, game thread: apply queued armour (profile + engine msg 5) and commands. Also while dead once the first
+/// biped was seen, so a respawn uses the latest look; game_tick respawns when the species differs.
 unsafe fn apply_pending(spawned: bool) {
-    if !spawned {
+    if !spawned && ORBIT_UNIT.load(Ordering::Relaxed) == u32::MAX {
         return;
     }
     if let Some(a) = PENDING_ARMOUR.lock().unwrap_or_else(|e| e.into_inner()).take() {
-        static ELITE: AtomicU32 = AtomicU32::new(u32::MAX); // MAX: first look, the biped already matches it
-        let p = crate::host::profile_ptr();
-        crate::profile::write_armour(p, &a);
+        crate::profile::write_armour(crate::host::profile_ptr(), &a);
         crate::ui::settings_apply::post_engine(5);
-        let was = ELITE.swap(a.elite as u32, Ordering::Relaxed);
-        if was != u32::MAX && was != a.elite as u32 && ORBIT_UNIT.load(Ordering::Relaxed) != u32::MAX {
-            // The species is fixed when the biped is made: respawn (Slayer respawns in a few seconds).
-            hs("(unit_kill_silent (player_get 0))");
-        }
+    }
+    if !spawned {
+        return;
     }
     for e in PENDING_HS.lock().unwrap_or_else(|e| e.into_inner()).drain(..) {
         hs(&e);
@@ -566,6 +583,12 @@ pub fn frame(ctx: &egui::Context) -> Frame {
         Some(t) => Frame::Live(t.id(), t.size_vec2()),
         None => Frame::Loading(c.started.elapsed().as_secs_f32()),
     }
+}
+
+/// The child is respawning the biped for a Spartan / Elite change (its frames pause; the last one stays up).
+pub fn switching() -> bool {
+    let g = CLIENT.lock().unwrap_or_else(|e| e.into_inner());
+    g.as_ref().is_some_and(|c| c.failed.is_none() && unsafe { (c.view as *const u32).add(4).read_volatile() } == STATE_SWITCHING)
 }
 
 /// Unattended captures: frames are arriving and the last look change had time to show (or the preview failed).

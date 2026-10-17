@@ -494,6 +494,13 @@ impl CustomizeScreen {
         crate::preview::set_camera(self.yaw, self.pitch, if a.elite { self.dist * 1.25 } else { self.dist });
         let p = ui.painter();
         p.image(tex, rect, uv, Color32::WHITE);
+        if crate::preview::switching() {
+            // Spartan <-> Elite: the engine respawns the biped (~5 s); dim the last frame meanwhile.
+            p.rect_filled(rect, 0.0, Color32::from_black_alpha(150));
+            let t = ui.input(|i| i.time) as f32;
+            let msg = format!("SWITCHING TO {} {}", if a.elite { "ELITE" } else { "SPARTAN" }, ".".repeat(1 + (t * 2.0) as usize % 3));
+            p.text(rect.center(), Align2::CENTER_CENTER, msg, FontId::proportional(16.0), ACCENT);
+        }
         p.rect_stroke(rect, 0.0, Stroke::new(1.0, LINE), StrokeKind::Inside);
         // Name of what is shown, over a fade at the bottom.
         let fade = Rect::from_min_max(egui::pos2(rect.left(), rect.bottom() - 74.0), rect.max);

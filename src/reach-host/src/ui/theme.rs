@@ -78,6 +78,23 @@ pub fn panel<R>(ui: &mut Ui, rect: Rect, add: impl FnOnce(&mut Ui) -> R) -> R {
     ui.scope_builder(egui::UiBuilder::new().max_rect(rect.shrink(22.0)), add).inner
 }
 
+/// Panel `width` wide hanging from `at` (`anchor_x`: LEFT/CENTER/RIGHT of `at`) that grows to fit its content: the
+/// background is painted behind the content once it is laid out, so a guessed height never cuts off the last row.
+pub fn panel_fit<R>(ui: &mut Ui, at: egui::Pos2, anchor_x: egui::Align, width: f32, add: impl FnOnce(&mut Ui) -> R) -> R {
+    const PAD: f32 = 22.0;
+    let bg = ui.painter().add(egui::Shape::Noop);
+    let left = at.x - width * (anchor_x.to_factor() + 1.0) / 2.0;
+    let max = Rect::from_min_size(egui::pos2(left + PAD, at.y + PAD), Vec2::new(width - 2.0 * PAD, 10_000.0));
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(max));
+    let inner = add(&mut child);
+    let r = Rect::from_min_size(egui::pos2(left, at.y), Vec2::new(width, child.min_rect().height() + 2.0 * PAD));
+    ui.painter().set(bg, egui::Shape::Vec(vec![
+        egui::Shape::rect_filled(r, 2.0, PANEL),
+        egui::Shape::rect_stroke(r, 2.0, Stroke::new(1.0, LINE), StrokeKind::Inside),
+    ]));
+    inner
+}
+
 /// Thin uppercase screen heading with a short accent rule under it.
 pub fn heading(ui: &mut Ui, text: &str) {
     let r = ui.label(egui::RichText::new(text.to_uppercase()).size(30.0).color(TEXT));

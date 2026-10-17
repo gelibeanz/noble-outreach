@@ -403,6 +403,27 @@ unsafe fn clip_to_client(hwnd: HWND) {
     let _ = ClipCursor(Some(&RECT { left: tl.x, top: tl.y, right: br.x, bottom: br.y }));
 }
 
+/// Captured with the cursor hidden: put it back in the middle of the window after each mouse move. ClipCursor alone
+/// is not enough (Wine on Wayland ignores it, and other programs can reset it), and in borderless fullscreen the
+/// hidden cursor then drifts onto another monitor, where a click leaves the game. Aiming uses raw input deltas, so
+/// warping the cursor does not move the view. Not while the cursor is shown (loadout picker reads it).
+unsafe fn recentre_cursor() {
+    if SPAWN_UI.load(Ordering::Relaxed) {
+        return;
+    }
+    let hwnd = HWND(WINDOW.load(Ordering::Relaxed) as _);
+    let mut r = RECT::default();
+    if hwnd.0.is_null() || GetClientRect(hwnd, &mut r).is_err() {
+        return;
+    }
+    let mut c = POINT { x: (r.left + r.right) / 2, y: (r.top + r.bottom) / 2 };
+    let _ = ClientToScreen(hwnd, &mut c);
+    let mut p = POINT::default();
+    if GetCursorPos(&mut p).is_ok() && ((p.x - c.x).abs() > 64 || (p.y - c.y).abs() > 64) {
+        let _ = SetCursorPos(c.x, c.y);
+    }
+}
+
 /// Window-procedure hook; `Some` means the message is handled and should not reach DefWindowProc.
 pub unsafe fn window_message(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> Option<LRESULT> {
     match msg {
@@ -465,6 +486,7 @@ unsafe fn raw_input(h: HRAWINPUT) {
         if !CAPTURED.load(Ordering::Relaxed) {
             return;
         }
+        recentre_cursor();
         let f = m.Anonymous.Anonymous.usButtonFlags;
         // (down flag, up flag, engine bit)
         for (d, u, bit) in [(0x1, 0x2, 0), (0x4, 0x8, 2), (0x10, 0x20, 1), (0x40, 0x80, 3), (0x100, 0x200, 4)] {
@@ -501,6 +523,9 @@ unsafe fn raw_input(h: HRAWINPUT) {
         if down && (0x31..=0x34).contains(&vk) && crate::ui::vote::key(vk - 0x31) {
             return;
         }
+        if down && vk == 0x08 && crate::ui::vote::hide_key() {
+            return; // Backspace: hide the vote panel for this round
+        }
         // Enter on a listen host's campaign lobby: start the mission now (lobby.rs).
         if down && vk == 0x0D && crate::lobby::start_now() {
             log!("lobby: host pressed Enter, starting now");
@@ -513,6 +538,10 @@ unsafe fn raw_input(h: HRAWINPUT) {
         }
         if down && vk == 0x1B {
             set_capture(false); // Esc goes to the engine (pause) and frees the mouse
+            // Joining (no unit yet): the engine has no pause screen to open, so open ours (LEAVE GAME).
+            if crate::net::host_addr().is_some() && !player0_alive() {
+                crate::ui::overlay::open();
+            }
         }
         key(vk, down);
     }
@@ -664,6 +693,14 @@ pub unsafe fn set_rumble(player: i32, r: *const u16) {
 pub const WM_INPUT_CURSOR: u32 = WM_APP + 0x61;
 /// Player 0 is on the spawn screen (map loaded, no unit: loadout picker / respawn wait).
 static SPAWN_UI: AtomicBool = AtomicBool::new(false);
+/// Player 0 has a live unit (set on the game thread in slot 36). `player0_view` reads the game thread's TLS block,
+/// so the window and render threads must use this instead.
+static PLAYER0_ALIVE: AtomicBool = AtomicBool::new(false);
+
+/// Any thread: does player 0 have a unit with a position (spawned, not loading/dead)?
+pub fn player0_alive() -> bool {
+    PLAYER0_ALIVE.load(Ordering::Relaxed)
+}
 /// Window thread: we hold one ShowCursor(false) (captured and not on the spawn screen).
 static CURSOR_HIDDEN: AtomicBool = AtomicBool::new(false);
 /// Test-script cursor in client pixels (x in the low half, y in the high half); u64::MAX = use the real one.
@@ -702,7 +739,9 @@ fn ensure_engine_window() {
 /// Game thread (slot 36): track the spawn screen from player 0's unit handle (all ones = none yet / dead).
 fn update_spawn_screen() {
     ensure_engine_window();
-    let on = unsafe { player0_view() }.is_some_and(|v| v.unit == u32::MAX);
+    let view = unsafe { player0_view() };
+    PLAYER0_ALIVE.store(view.as_ref().is_some_and(|v| v.pos.is_some()), Ordering::Relaxed);
+    let on = view.is_some_and(|v| v.unit == u32::MAX);
     if SPAWN_UI.swap(on, Ordering::Relaxed) != on {
         log!("input: spawn screen {} (loadout picker takes the mouse cursor)", if on { "up, cursor shown" } else { "gone" });
         let hwnd = HWND(WINDOW.load(Ordering::Relaxed) as _);

@@ -244,6 +244,9 @@ fn state_name(state: u32) -> &'static str {
 unsafe extern "system" fn slot_set_game_state(_this: *mut c_void, state: u32) {
     note_override(3, "set_game_state");
     log!("host slot 3 set_game_state({state:#x}) = {}", state_name(state));
+    if state == 10 {
+        crate::mission::on_game_over();
+    }
     let base = crate::net::ENGINE_BASE.load(Ordering::Relaxed);
     if state == 10 && base != 0 {
         // RequestGameExit records the first reason/message at 0x180c1a110 / 0x180c1a108 before calling us.
@@ -269,8 +272,10 @@ unsafe extern "system" fn slot_get_event_manager(_this: *mut c_void) -> *mut Eve
     std::ptr::addr_of_mut!(EVT_MANAGER)
 }
 
-// Slot 32: 0x170-byte video settings; the engine reads only +0x14 (vsync) and +0x15 (frame cap), at start-up
-// and on engine message 5 (notes/host-slots.md). Width/height: our swap-chain size.
+// Slot 32: 0x170-byte video settings, read at start-up and on engine message 5 (notes/host-slots.md). Width/height:
+// our swap-chain size. +0x08..+0x0F are quality levels (0 low, 1 medium, 2 high: detail/LOD distances, lights,
+// shadows, effects, water, anisotropy) and +0x10..+0x13 feature switches (1 = on), applied every frame by
+// 0x18003aef8; all zero = the Low preset with features off (the engine's own defaults are 2 and 1).
 unsafe extern "system" fn slot_get_video_settings(_this: *mut c_void, io: *mut [u8; 0x170]) -> bool {
     note_override(32, "get_video_settings");
     let g = crate::ui::settings::get().graphics;
@@ -279,9 +284,11 @@ unsafe extern "system" fn slot_get_video_settings(_this: *mut c_void, io: *mut [
     io.fill(0);
     io[0..4].copy_from_slice(&w.to_le_bytes());
     io[4..8].copy_from_slice(&h.to_le_bytes());
+    io[0x08..0x10].fill(g.quality.min(2));
+    io[0x10..0x14].fill(1);
     io[0x14] = g.vsync as u8;
     io[0x15] = g.fps_cap.min(4);
-    log!("video settings: {w}x{h}, vsync {}, frame cap code {}", g.vsync as u8, g.fps_cap);
+    log!("video settings: {w}x{h}, quality {}, vsync {}, frame cap code {}", g.quality.min(2), g.vsync as u8, g.fps_cap);
     true
 }
 

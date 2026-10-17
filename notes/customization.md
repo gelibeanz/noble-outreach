@@ -91,6 +91,11 @@ and a crash or missing engine just leaves the flat figure.
 - **Live changes:** armour/colours change on the standing biped through `write_armour` + engine message 5 (verified:
   helmet and both colours changed between captures without a respawn). Spartan ↔ Elite needs a new biped:
   `unit_kill_silent`, Slayer respawns in ~5 s and the observer director re-targets the new unit.
+  The child records the species of each new biped (profile +0x38 when it appears) and kills once per biped when
+  the wanted species differs; looks sent while dead are still applied (msg 5), so flip-flopping during the respawn
+  ends in one kill and the last choice. While switching the child publishes no frames and sets header state 2; the
+  menu dims the last frame with "SWITCHING TO …" (before 2026-10-15 evening it streamed the death camera and the
+  loadout picker, which looked like the character just died).
 
 ### Child protocol (`preview.rs`)
 - stdin lines from the menu: `view <yaw> <pitch> <dist>`, `armour <Armour as JSON>`; end of input = exit.

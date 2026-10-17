@@ -43,12 +43,47 @@ pub fn start_now() -> bool {
     true
 }
 
-/// Listen host's lobby panel: (players in incl. the host, session size, seconds left) while gathering.
-pub fn waiting_view() -> Option<(u32, u32, u32)> {
-    if !LISTEN.load(Ordering::Relaxed) || !HOLDING.load(Ordering::Relaxed) || RELEASED.load(Ordering::Relaxed) {
-        return None;
+/// Lobby panel: (players in, session size, seconds left, we are the listen host) while gathering. A listen host uses
+/// its own state; a client joined to a gathering dedicated server shows what the server's `RLBY` packets say.
+pub fn waiting_view() -> Option<(u32, u32, u32, bool)> {
+    if LISTEN.load(Ordering::Relaxed) {
+        if !HOLDING.load(Ordering::Relaxed) || RELEASED.load(Ordering::Relaxed) {
+            return None;
+        }
+        return Some((GATHERED.load(Ordering::Relaxed).max(1), MAX_PLAYERS.load(Ordering::Relaxed), SECS_LEFT.load(Ordering::Relaxed), true));
     }
-    Some((GATHERED.load(Ordering::Relaxed).max(1), MAX_PLAYERS.load(Ordering::Relaxed), SECS_LEFT.load(Ordering::Relaxed)))
+    let v = *CLIENT_VIEW.lock().unwrap_or_else(|e| e.into_inner());
+    let (players, max, secs, at) = v?;
+    (at.elapsed() < std::time::Duration::from_secs(3) && secs > 0).then_some((players, max, secs, false))
+}
+
+// ---- dedicated server -> clients: lobby status ---------------------------------------------------------------
+// `RLBY` v1, players u8, max u8, seconds left u8 (0 = mission starting). Sent about once a second while a dedicated
+// campaign server gathers, and three times when the mission starts. Clients without this code ignore it.
+const MAGIC: [u8; 4] = *b"RLBY";
+static CLIENT_VIEW: std::sync::Mutex<Option<(u32, u32, u32, std::time::Instant)>> = std::sync::Mutex::new(None);
+static LAST_SEND_MS: AtomicU64 = AtomicU64::new(0);
+
+fn broadcast_status(players: u32, max: u32, secs: u32) {
+    let pkt = [MAGIC[0], MAGIC[1], MAGIC[2], MAGIC[3], 1, players.min(255) as u8, max.min(255) as u8, secs.min(255) as u8];
+    for a in crate::net::active_peer_addrs(std::time::Duration::from_secs(4)) {
+        crate::net::send_raw(a, &pkt);
+    }
+}
+
+/// net.rs receive thread: true when `pkt` is a lobby status datagram (handled here, never queued for the engine).
+pub fn handle(pkt: &[u8], from: std::net::SocketAddr) -> bool {
+    if pkt.len() < 8 || pkt[..4] != MAGIC {
+        return false;
+    }
+    if pkt[4] == 1 && crate::net::host_addr() == Some(from) {
+        let v = (pkt[5] as u32, pkt[6] as u32, pkt[7] as u32, std::time::Instant::now());
+        let prev = CLIENT_VIEW.lock().unwrap_or_else(|e| e.into_inner()).replace(v);
+        if prev.is_none_or(|p| p.0 != v.0) {
+            log!("lobby: server has {}/{} players, mission starts in {} s", v.0, v.1, v.2);
+        }
+    }
+    true
 }
 
 pub fn parse(argv: &[String]) -> Result<(), String> {
@@ -110,6 +145,10 @@ pub unsafe fn tick(base: usize) {
     if players != prev {
         log!("lobby: {players}/{max} players gathered, mission starts in {} s or when full", left.div_ceil(1000));
     }
+    if !listen && now_ms() - LAST_SEND_MS.load(Ordering::Relaxed) >= 1000 {
+        LAST_SEND_MS.store(now_ms(), Ordering::Relaxed);
+        broadcast_status(players, max, SECS_LEFT.load(Ordering::Relaxed));
+    }
     // Test hook: `REACH_LOBBY_START_AFTER=N` presses "start now" N s into a listen host's lobby.
     if listen && std::env::var("REACH_LOBBY_START_AFTER").ok().and_then(|v| v.parse::<u64>().ok()).is_some_and(|n| waited >= n * 1000) {
         start_now();
@@ -120,6 +159,9 @@ pub unsafe fn tick(base: usize) {
         log!("lobby: starting the mission with {players}/{max} players ({why})");
         RELEASED.store(true, Ordering::Relaxed);
         target.write_volatile(machines);
+        if !listen {
+            broadcast_status(players, max, 0); // clients drop the panel at once
+        }
     } else {
         target.write_volatile(HOLD);
     }

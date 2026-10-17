@@ -17,6 +17,18 @@ static INTERACTIVE: AtomicBool = AtomicBool::new(false);
 static SEL: AtomicU32 = AtomicU32::new(0);
 static PAD_PREV: AtomicU16 = AtomicU16::new(0);
 static FRAMES: AtomicU32 = AtomicU32::new(0);
+/// Round id the player hid with Backspace (0 = none): the panel stays hidden until the next round or the result.
+static HIDDEN: AtomicU16 = AtomicU16::new(0);
+
+/// input.rs: Backspace while a vote is open hides the panel for this round (voting with 1-4 still works).
+/// True = consumed.
+pub fn hide_key() -> bool {
+    let Some(v) = vote::view() else { return false };
+    let Some(o) = &v.open else { return false };
+    HIDDEN.store(o.id, Ordering::Relaxed);
+    log!("vote: panel hidden for round {}", o.id);
+    true
+}
 
 /// input.rs: digit key `n` (0 = key 1) pressed while the game has the keyboard. True = consumed (a vote is open).
 pub fn key(n: u8) -> bool {
@@ -33,7 +45,7 @@ fn mode_title(o: &vote::Opt) -> String {
 
 /// Is a player unit alive under us? (No unit = pre-game / loading / dead: the panel may take the mouse and pad.)
 fn in_game() -> bool {
-    unsafe { crate::input::player0_view() }.is_some_and(|v| v.pos.is_some())
+    crate::input::player0_alive() // render thread: player0_view only works on the game thread
 }
 
 /// Passive layer (overlay.rs): current vote view, if any; also switches the cursor on/off for the panel.
@@ -97,7 +109,18 @@ fn poll_pad(rows: u32) {
 pub fn draw(ui: &mut egui::Ui, v: &View) {
     let full = ui.max_rect();
     let w = 560.0f32.min(full.width() - 32.0);
-    if let Some(o) = &v.open {
+    if let Some(o) = v.open.as_ref().filter(|o| HIDDEN.load(Ordering::Relaxed) == o.id) {
+        let _ = o; // hidden with Backspace: nothing until the result
+    } else if let Some(o) = v.open.as_ref().filter(|_| v.mine.is_some() && in_game()) {
+        // Voted mid-game: a small bar so the match stays visible (1-4 still change the vote).
+        let voted: u32 = o.tally.iter().map(|&t| t as u32).sum();
+        let mine = v.mine.unwrap_or(0);
+        let pick = if mine == NONE { if o.keep { "Keep playing".to_string() } else { "None of the above".to_string() } } else { o.options.get(mine as usize).map(|p| p.name.clone()).unwrap_or_default() };
+        theme::panel_fit(ui, egui::pos2(full.center().x, full.top() + 16.0), egui::Align::Center, w, |ui| {
+            ui.label(egui::RichText::new(format!("VOTE  ·  {} s  ·  your pick: {pick}  ·  {voted} of {} voted", o.secs_left, o.voters.max(voted as u8))).size(14.0).color(TEXT));
+            ui.label(egui::RichText::new("1-4 change your vote  ·  Backspace hides").size(11.5).color(DIM));
+        });
+    } else if let Some(o) = &v.open {
         let rows = o.options.len() + o.none_allowed as usize;
         poll_pad(rows as u32);
         for k in 0..4u8 {
@@ -107,11 +130,11 @@ pub fn draw(ui: &mut egui::Ui, v: &View) {
             }
         }
         // Rows shrink on small windows so the whole panel fits.
-        let row_h = ((full.height() - 150.0) / rows as f32).clamp(30.0, 52.0);
-        let h = 96.0 + (row_h + 6.0) * rows as f32;
+        // Heading, subtitle, hint and padding take ~170 points; the panel itself grows to fit (theme::panel_fit).
+        let row_h = ((full.height() - 190.0) / rows as f32 - 6.0).clamp(30.0, 52.0);
+        let h = 170.0 + (row_h + 6.0) * rows as f32;
         let top = (full.height() - h).clamp(0.0, 80.0) / 2.0;
-        let r = Rect::from_min_size(egui::pos2(full.center().x - w / 2.0, full.top() + top), Vec2::new(w, h));
-        theme::panel(ui, r, |ui| {
+        theme::panel_fit(ui, egui::pos2(full.center().x, full.top() + top), egui::Align::Center, w, |ui| {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("VOTE FOR THE NEXT GAME").size(19.0).color(ACCENT).strong());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -127,6 +150,7 @@ pub fn draw(ui: &mut egui::Ui, v: &View) {
                 let choice = if k == 3 { NONE } else { k as u8 };
                 let (title, detail) = match o.options.get(k) {
                     Some(opt) if k < 3 => (opt.name.clone(), format!("{}  ·  {}", super::menu::map_title(&opt.map), mode_title(opt))),
+                    _ if o.keep => ("Keep playing this game".to_string(), "Cancel the vote and carry on".to_string()),
                     _ => ("None of the above".to_string(), "Re-roll three new games (once)".to_string()),
                 };
                 let count = o.tally[choice as usize] as f32;
@@ -148,16 +172,19 @@ pub fn draw(ui: &mut egui::Ui, v: &View) {
                 p.text(egui::pos2(row.right() - 14.0, row.center().y), Align2::RIGHT_CENTER, format!("{}", count as u32), FontId::proportional(22.0), if count > 0.0 { TEXT } else { DIM });
                 ui.add_space(6.0);
             }
-            ui.label(egui::RichText::new(if INTERACTIVE.load(Ordering::Relaxed) { "Keys 1-4, click, or d-pad + A" } else { "Press 1-4 to vote" }).size(12.0).color(DIM));
+            ui.label(egui::RichText::new(if INTERACTIVE.load(Ordering::Relaxed) { "Keys 1-4, click, or d-pad + A" } else { "Press 1-4 to vote  ·  Backspace hides" }).size(12.0).color(DIM));
         });
     } else if let Some((res, _)) = &v.result {
-        let r = Rect::from_min_size(egui::pos2(full.center().x - w / 2.0, full.top() + 40.0), Vec2::new(w, 112.0));
-        theme::panel(ui, r, |ui| {
+        theme::panel_fit(ui, egui::pos2(full.center().x, full.top() + 40.0), egui::Align::Center, w, |ui| {
             ui.label(egui::RichText::new("NEXT GAME").size(15.0).color(DIM));
             ui.label(egui::RichText::new(&res.opt.name).size(22.0).color(ACCENT).strong());
             ui.label(egui::RichText::new(format!("{}  ·  {}", super::menu::map_title(&res.opt.map), mode_title(&res.opt))).size(14.0).color(TEXT));
-            let note = if vote::following() { "Server restarting, rejoining when it is back ..." } else if res.restart { "Server restarting ..." } else { "Already playing it, carrying on" };
+            let note = if vote::following() { "Server restarting, rejoining when it is back ..." } else if res.restart { "Server restarting ..." } else if res.winner == NONE { "Vote cancelled, carrying on" } else { "Already playing it, carrying on" };
             ui.label(egui::RichText::new(note).size(13.0).color(DIM));
+        });
+    } else if let Some(text) = vote::call_notice() {
+        theme::panel_fit(ui, egui::pos2(full.center().x, full.top() + 40.0), egui::Align::Center, w, |ui| {
+            ui.label(egui::RichText::new(text).size(15.0).color(TEXT));
         });
     }
 }

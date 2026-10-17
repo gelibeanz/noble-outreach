@@ -29,13 +29,13 @@ rm -f "$dist/client/launcher/ReachReclaimer-Launcher.exe" "$dist/client/launcher
 cargo zigbuild --release --target x86_64-pc-windows-gnu -p reach-launcher
 cargo zigbuild --release --target x86_64-unknown-linux-gnu.2.31 -p reach-launcher
 [ -n "${NO_HOST:-}" ] || cargo zigbuild --release --target x86_64-pc-windows-gnu -p reach-host
-cp "$tgt/x86_64-pc-windows-gnu/release/reach-launcher.exe" "$dist/NobleOutreach-Launcher.exe"
-cp "$tgt/x86_64-unknown-linux-gnu/release/reach-launcher" "$dist/NobleOutreach-Launcher-linux"
+cp --remove-destination "$tgt/x86_64-pc-windows-gnu/release/reach-launcher.exe" "$dist/NobleOutreach-Launcher.exe"
+cp --remove-destination "$tgt/x86_64-unknown-linux-gnu/release/reach-launcher" "$dist/NobleOutreach-Launcher-linux"
 chmod +x "$dist/NobleOutreach-Launcher-linux"
 # Same files again under client/launcher/ for the self-update (the name is what the master's manifest lists).
-cp "$dist/NobleOutreach-Launcher.exe" "$dist/NobleOutreach-Launcher-linux" "$dist/client/launcher/"
+cp --remove-destination "$dist/NobleOutreach-Launcher.exe" "$dist/NobleOutreach-Launcher-linux" "$dist/client/launcher/"
 echo "$lver" > "$dist/client/launcher/launcher-version.txt"
-cp "$tgt/x86_64-pc-windows-gnu/release/reach-host.exe" "$dist/client/reach-host.exe"
+cp --remove-destination "$tgt/x86_64-pc-windows-gnu/release/reach-host.exe" "$dist/client/reach-host.exe"
 # Client version: date + short commit (+dirty), shown in the launcher.
 ver="$(date +%Y.%m.%d)-$(git rev-parse --short HEAD 2>/dev/null || echo nogit)"
 git diff --quiet 2>/dev/null || ver="$ver-dirty"

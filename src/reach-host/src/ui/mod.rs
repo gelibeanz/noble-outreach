@@ -215,8 +215,12 @@ fn binding_code(msg: u32, wp: WPARAM, lp: LPARAM) -> Option<u32> {
 }
 
 /// Pixels per point: the layout is designed for 720 lines and scales with the window height.
-fn scale_for(h: u32) -> f32 {
-    (h as f32 / 720.0).clamp(0.75, 3.0)
+/// Points to pixels: the 1280 x 720 layout fitted to the back buffer (the narrower of width and height decides, so
+/// 16:10 / 4:3 / windowed sizes do not cut screens off), times the player's menu size setting.
+fn scale_for(w: u32, h: u32) -> f32 {
+    let fit = (h as f32 / 720.0).min(w as f32 / 1280.0);
+    let user = settings::get().graphics.ui_scale.clamp(50, 150) as f32 / 100.0;
+    (fit * user).clamp(0.5, 3.0)
 }
 
 /// Run one egui frame and draw it into `rtv` (size `w`x`h`). `preserve_state`: swap in our own pipeline state
@@ -239,7 +243,7 @@ pub unsafe fn draw(
         *g = Some(Gui { ctx, renderer, start: Instant::now(), state: None });
     }
     let gui = g.as_mut().unwrap();
-    let ppp = scale_for(h);
+    let ppp = scale_for(w, h);
     // Window events are in client pixels; the back buffer can be smaller or larger (rendering resolution).
     let mut cr = RECT::default();
     let to_buf = if GetClientRect(HWND(crate::host::WINDOW.load(Ordering::Relaxed) as _), &mut cr).is_ok() && cr.right > 0 {

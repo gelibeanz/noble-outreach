@@ -31,6 +31,17 @@ const MISSIONS: &[(&str, &str, &str, &str)] = &[
     ("m70_bonus", "Lone Wolf", "C11_LONEWOLF", "The last stand of Noble Six."),
 ];
 
+/// The mission after `stem` in story order whose map is installed (None after Lone Wolf).
+pub fn next_mission(stem: &str, mcc: &std::path::Path) -> Option<&'static str> {
+    let i = MISSIONS.iter().position(|m| m.0 == stem)?;
+    MISSIONS[i + 1..].iter().map(|m| m.0).find(|s| mcc.join("haloreach").join("maps").join(format!("{s}.map")).is_file())
+}
+
+/// Display name of a mission ("Winter Contingency"), or the stem.
+pub fn mission_name(stem: &str) -> &str {
+    MISSIONS.iter().find(|m| m.0 == stem).map_or(stem, |m| m.1)
+}
+
 /// Firefight maps: (map stem, name, texture-pack key, tagline). Thumbnail `REACHFIREFIGHT_<key>`, banner `…<key>LARGE`.
 const FF_MAPS: &[(&str, &str, &str, &str)] = &[
     ("ff50_park", "Beachhead", "BEACHHEAD", "A seaside plaza in New Alexandria's parkland."),
@@ -609,7 +620,7 @@ fn big_ghost(ui: &mut Ui, label: &str, width: f32, enabled: bool) -> egui::Respo
 
 /// Listen host's campaign lobby (overlay passive layer while lobby.rs holds launch state 8): who is in, Enter to
 /// start now, the countdown, and where friends can reach us.
-pub fn lobby_panel(ui: &mut Ui, players: u32, max: u32, secs: u32) {
+pub fn lobby_panel(ui: &mut Ui, players: u32, max: u32, secs: u32, host: bool) {
     let full = ui.max_rect();
     let p = ui.painter();
     p.rect_filled(full, 0.0, Color32::from_black_alpha(150));
@@ -630,7 +641,7 @@ pub fn lobby_panel(ui: &mut Ui, players: u32, max: u32, secs: u32) {
         p.rect_filled(c, 1.0, if i < players { ACCENT } else { Color32::from_gray(60) });
     }
     y += 24.0;
-    p.text(Pos2::new(x, y), Align2::LEFT_TOP, "Press Enter to start now", FontId::proportional(17.0), TEXT);
+    p.text(Pos2::new(x, y), Align2::LEFT_TOP, if host { "Press Enter to start now" } else { "Joined. Waiting for the others ..." }, FontId::proportional(17.0), TEXT);
     y += 26.0;
     let left = if secs > 0 { format!("The mission starts in {secs} s, or as soon as everyone is in.") } else { "The mission starts as soon as everyone is in.".into() };
     p.text(Pos2::new(x, y), Align2::LEFT_TOP, left, FontId::proportional(13.5), DIM);

@@ -1,6 +1,6 @@
 [package]
 name = "reach-host"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Standalone Halo: Reach host: loads haloreach.dll, supplies window, D3D11 swap chain and the host interface"
 
@@ -30,4 +30,5 @@ windows = { version = "0.62", features = [
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Input_XboxController",
     "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_HiDpi",
 ] }

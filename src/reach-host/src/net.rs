@@ -95,6 +95,8 @@ fn recv_loop(sock: UdpSocket) {
             Ok((n, from)) if crate::nat::handle(&buf[..n], from) => {}
             // Playlist votes (vote.rs) likewise.
             Ok((n, from)) if crate::vote::handle(&sock, &buf[..n], from) => {}
+            // Campaign lobby status from a dedicated server (lobby.rs).
+            Ok((n, from)) if crate::lobby::handle(&buf[..n], from) => {}
             // Wake packets for a dormant dedicated server (dormant.rs).
             Ok((n, from)) if crate::dormant::handle(&buf[..n], from) => {}
             // Dormant / engine still starting: wake on the first engine datagram, drop it (the joiner retries).
@@ -343,6 +345,13 @@ pub fn active_peer_addrs(max_age: Duration) -> Vec<SocketAddr> {
     let Some(net) = NET.get() else { return Vec::new() };
     let peers = net.peers.lock().unwrap();
     peers.iter().filter(|p| p.left.is_none() && p.last_seen.is_some_and(|t| t.elapsed() < max_age)).map(|p| p.addr).collect()
+}
+
+/// Client: has anything arrived from the host (peer 0) yet?
+pub fn host_heard() -> bool {
+    let Some(net) = NET.get() else { return false };
+    let peers = net.peers.lock().unwrap();
+    peers.iter().any(|p| p.id == net_id(0) && p.last_seen.is_some())
 }
 
 /// Side channels: is `addr` one of our peers?
