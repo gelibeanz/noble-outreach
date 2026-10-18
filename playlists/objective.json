@@ -1,0 +1,22 @@
+{
+  "name": "Objective",
+  "entries": [
+    { "name": "CTF on Zealot",                 "mode": "slayer", "map": "45_aftship",        "game_variant": "ctf_054.bin",               "weight": 2 },
+    { "name": "1-Flag CTF on Boardwalk",       "mode": "slayer", "map": "50_panopticon",     "game_variant": "ctf_1flag_054.bin",         "weight": 1 },
+    { "name": "Multi-Team CTF on Sword Base",  "mode": "slayer", "map": "20_sword_slayer",   "game_variant": "ctf_multiteam_054.bin",     "weight": 1 },
+    { "name": "Neutral Flag on Zealot",        "mode": "slayer", "map": "45_aftship",        "game_variant": "ctf_neutralflag_054.bin",   "weight": 1 },
+    { "name": "CTF on Pinnacle (Forge World)", "mode": "slayer", "map": "forge_world",       "game_variant": "ctf_054.bin", "map_variant": "hr_forgeWorld_pinnacle.mvar", "weight": 1 },
+    { "name": "Assault on Sword Base",         "mode": "slayer", "map": "20_sword_slayer",   "game_variant": "assault_054.bin",           "weight": 2 },
+    { "name": "One Bomb on Powerhouse",        "mode": "slayer", "map": "30_settlement",     "game_variant": "assault_one_bomb_054.bin",  "weight": 1 },
+    { "name": "Neutral Bomb on Zealot",        "mode": "slayer", "map": "45_aftship",        "game_variant": "assault_neutral_bomb_054.bin", "weight": 1 },
+    { "name": "Oddball on Sword Base",         "mode": "slayer", "map": "20_sword_slayer",   "game_variant": "oddball_054.bin",           "weight": 2 },
+    { "name": "King of the Hill on Powerhouse","mode": "slayer", "map": "30_settlement",     "game_variant": "koth_054.bin",              "weight": 2 },
+    { "name": "Crazy King on Countdown",       "mode": "slayer", "map": "45_launch_station", "game_variant": "koth_crazyking_054.bin",    "weight": 1 },
+    { "name": "Stockpile on Zealot",           "mode": "slayer", "map": "45_aftship",        "game_variant": "stockpile_054.bin",         "weight": 1 },
+    { "name": "Territories on Sword Base",     "mode": "slayer", "map": "20_sword_slayer",   "game_variant": "territories_054.bin",       "weight": 1 },
+    { "name": "Land Grab on Reflection",       "mode": "slayer", "map": "52_ivory_tower",    "game_variant": "territories-landgrab_054.bin", "weight": 1 },
+    { "name": "Headhunter Pro on Powerhouse",  "mode": "slayer", "map": "30_settlement",     "game_variant": "headhunter_pro_054.bin",    "weight": 1 },
+    { "name": "4v4 Assault on Zealot",         "mode": "slayer", "map": "45_aftship",        "game_variant": "hr_4v4_team_assault_dmr_ar_3points_tu.bin", "weight": 1 },
+    { "name": "4v4 Stockpile on Zealot",       "mode": "slayer", "map": "45_aftship",        "game_variant": "hr_4v4_team_stockpile_dmr_ar_10points_tu.bin", "weight": 1 }
+  ]
+}

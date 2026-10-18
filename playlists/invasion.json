@@ -1,0 +1,8 @@
+{
+  "name": "Invasion",
+  "entries": [
+    { "name": "Invasion on Breakpoint", "mode": "slayer", "map": "dlc_invasion", "game_variant": "3nvasion_dlc_054.bin",      "weight": 2 },
+    { "name": "Invasion on Spire",      "mode": "slayer", "map": "35_island",    "game_variant": "3nvasion_spire_054.bin",    "weight": 1 },
+    { "name": "Invasion on Boneyard",   "mode": "slayer", "map": "70_boneyard",  "game_variant": "3nvasion_boneyard_054.bin", "weight": 1 }
+  ]
+}

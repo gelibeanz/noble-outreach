@@ -1,0 +1,11 @@
+{
+  "name": "Gun Game",
+  "entries": [
+    { "name": "Gun Game on Sword Base",  "mode": "slayer", "map": "20_sword_slayer",   "game_variant": "gun-game.bin", "weight": 2 },
+    { "name": "Gun Game on Reflection",  "mode": "slayer", "map": "52_ivory_tower",    "game_variant": "gun-game.bin", "weight": 2 },
+    { "name": "Gun Game on Countdown",   "mode": "slayer", "map": "45_launch_station", "game_variant": "gun-game.bin", "weight": 1 },
+    { "name": "Gun Game on Powerhouse",  "mode": "slayer", "map": "30_settlement",     "game_variant": "gun-game.bin", "weight": 1 },
+    { "name": "Gun Game on Zealot",      "mode": "slayer", "map": "45_aftship",        "game_variant": "gun-game.bin", "weight": 1 },
+    { "name": "Gun Game on Forge World", "mode": "slayer", "map": "forge_world",       "game_variant": "gun-game.bin", "weight": 1 }
+  ]
+}

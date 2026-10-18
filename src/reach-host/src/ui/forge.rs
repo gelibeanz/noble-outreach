@@ -367,38 +367,6 @@ pub fn save_toast(ui: &mut Ui) {
     });
 }
 
-// ---- Map-variant row for the Play / Host screens ----------------------------------------------------------------
-
-/// "Map variant: Default ◀ ▶" row: cycles through the saved variants of `map` (stem). Returns the chosen file.
-pub fn variant_row(ui: &mut Ui, map: &str, sel: &mut Option<PathBuf>) {
-    let list: Vec<Saved> = forge::list().into_iter().filter(|s| s.map.is_empty() || s.map == map).collect();
-    if sel.as_ref().is_some_and(|p| !list.iter().any(|s| &s.path == p)) {
-        *sel = None;
-    }
-    let pos = sel.as_ref().and_then(|p| list.iter().position(|s| &s.path == p));
-    ui.horizontal(|ui| {
-        theme::caption(ui, "Map variant");
-        if list.is_empty() {
-            ui.label(egui::RichText::new("Default (no saved Forge maps for this map)").size(14.0).color(DIM));
-            return;
-        }
-        let n = list.len() + 1; // 0 = default
-        let cur = pos.map_or(0, |i| i + 1);
-        let mut next = cur;
-        if theme::ghost_button(ui, "◀").clicked() {
-            next = (cur + n - 1) % n;
-        }
-        let label = pos.map_or_else(|| "Default".to_string(), |i| list[i].name.clone());
-        ui.add_sized(Vec2::new(200.0, 30.0), egui::Label::new(egui::RichText::new(label).size(15.0)).truncate());
-        if theme::ghost_button(ui, "▶").clicked() {
-            next = (cur + 1) % n;
-        }
-        if next != cur {
-            *sel = if next == 0 { None } else { Some(list[next - 1].path.clone()) };
-        }
-    });
-}
-
 // ---- Drawing helpers ---------------------------------------------------------------------------------------------
 
 fn cover(p: &egui::Painter, t: &TextureHandle, r: Rect, tint: Color32) {

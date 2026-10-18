@@ -458,7 +458,7 @@ impl BrowserScreen {
     }
 
     fn variant_path(&self, file: &str) -> PathBuf {
-        self.mcc.join("haloreach").join("game_variants").join(file)
+        crate::catalog::game_variant_path(&self.mcc, file)
     }
 
     /// Join a row: full args when the master or the query described it, else the default-session direct connect.
@@ -485,9 +485,7 @@ impl BrowserScreen {
         let addr = query::resolve(&s.addr)?;
         let kind = map_kind(&s.map);
         let gv = self.variant_path(&s.game_variant);
-        if !gv.is_file() && kind != query::MODE_CAMPAIGN {
-            return Err(format!("game variant {} is not in your MCC files", s.game_variant));
-        }
+        // A game type we lack is fine: the engine sends the host's through the session (options.rs uses a stock one).
         // Same as --join-server: dedicated and listen hosts both take late joiners, so every joiner gets a random
         // identity (friends must not share one) and an OS-chosen port.
         let mut a: Vec<String> = vec!["--net-role".into(), "client".into()];

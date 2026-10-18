@@ -13,7 +13,7 @@ through the host global, so a slot with no listed caller may still be called thr
 | 2 | 0x010 | resize | `void ()` | `ProcessEngineMessageQueue`, msg 0x0E | when the host posts msg 0x0E | resize the swap chain buffers if the window changed, else no-op. Engine re-reads the back-buffer size right after | C |
 | 3 | 0x018 | set_game_state | `void (u32 state)` | 7+ sites, see notes | state changes | no-op; but treat state 10 as "engine is ending the game" | C (values) / M (meaning) |
 | 4 | 0x020 | signal_exit | `void (u32 reason, const char* debug_msg)` | `RunGameThreadBody` 0x18000db08 | once, as the game thread exits | no-op (log it) | C |
-| 5 | 0x028 | game_auto_save | `void (const u8* data, u32 len)` | `FlushPendingSavesToHost` 0x18000ce9c, `WriteCoreSaveToHost` 0x180035538 | checkpoint / core save | no-op (saves are lost). To persist: copy `len` bytes | C |
+| 5 | 0x028 | game_auto_save | `void (const u8* data, u32 len)` | `FlushPendingSavesToHost` 0x18000ce9c, `WriteCoreSaveToHost` 0x180035538 | checkpoint / core save (0xA60000 bytes) | campaign: kept as `saves/<mission>.bin` (checkpoint.rs), resumed via options +0x2BF18 | C |
 | 6 | 0x030 | set_game_result | `void (void* result)` | `BuildGameResultsForHost` 0x1800f92e8 | end of a game (post-game stats) | no-op | M |
 | 7 | 0x038 | pause_game | `void (u32 controller)` | `HandleStartButtonPause` 0x1802b6bc0 | Start pressed in game | no-op means Start does nothing (see notes) | C |
 | 9 | 0x048 | set_game_objectives | `void (const wchar_t* primary, const wchar_t* secondary)` | `HandleStartButtonPause` 0x1802b6bc0 | campaign only, right before slot 7 | no-op | C |

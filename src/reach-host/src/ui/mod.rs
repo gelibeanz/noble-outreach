@@ -7,6 +7,7 @@
 
 pub mod browser_screen;
 pub mod campaign;
+pub mod carnage;
 pub mod customize;
 pub mod forge;
 pub mod hostinfo;
@@ -15,14 +16,16 @@ pub mod mccart;
 pub mod menu;
 pub mod menu_scene;
 pub mod overlay;
+pub mod play_screen;
 pub mod scoreboard;
 pub mod settings;
 pub mod settings_apply;
 pub mod settings_screen;
 pub mod theme;
 pub mod vote;
+pub mod widgets;
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -34,9 +37,18 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 
 use crate::log;
 
-/// Posted to the window by other threads: the overlay opened / closed (cursor and capture are per window thread).
+/// Posted to the window by other threads: an owner (wParam, `OWN_*`) wants keyboard and mouse / is done with them
+/// (cursor and capture are per window thread).
 pub const WM_UI_OPEN: u32 = WM_APP + 0x51;
 pub const WM_UI_CLOSE: u32 = WM_APP + 0x52;
+
+/// Who holds the UI. Each owner opens and closes only its own bit, so one closing (the pause overlay on LEAVE GAME,
+/// a message that lands after the menu is back) cannot switch off another (the menu, the call-vote page).
+pub const OWN_MENU: u32 = 1;
+pub const OWN_OVERLAY: u32 = 2;
+pub const OWN_VOTE: u32 = 4;
+pub const OWN_SCOREBOARD: u32 = 8;
+static OWNERS: AtomicU32 = AtomicU32::new(0);
 
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 /// Window events in client pixels; converted to points when a frame drains them.
@@ -59,11 +71,38 @@ pub fn active() -> bool {
     ACTIVE.load(Ordering::Relaxed)
 }
 
-/// Window thread only: the UI takes (or gives back) keyboard and mouse.
+/// Window thread only: the menu takes (or gives back) keyboard and mouse. Entering or leaving the menu also drops
+/// every in-game owner, so a game's late open/close cannot leave the UI on (or off) for what comes next.
 pub fn set_active(on: bool) {
+    let old = OWNERS.swap(if on { OWN_MENU } else { 0 }, Ordering::Relaxed);
+    if old & !OWN_MENU != 0 {
+        log!("ui: dropped in-game owners {:#x} ({})", old & !OWN_MENU, if on { "menu" } else { "game" });
+    }
+    apply_owners();
+}
+
+/// Window thread only: `owner` (`OWN_*`) takes or gives back keyboard and mouse.
+fn set_owner(owner: u32, on: bool) {
+    let old = if on { OWNERS.fetch_or(owner, Ordering::Relaxed) } else { OWNERS.fetch_and(!owner, Ordering::Relaxed) };
+    if (old & owner != 0) != on {
+        log!("ui: owner {owner:#x} {} (owners now {:#x})", if on { "open" } else { "closed" }, OWNERS.load(Ordering::Relaxed));
+    }
+    apply_owners();
+}
+
+fn apply_owners() {
+    let on = OWNERS.load(Ordering::Relaxed) != 0;
     if ACTIVE.swap(on, Ordering::Relaxed) != on {
         EVENTS.lock().unwrap_or_else(|e| e.into_inner()).clear();
         unsafe { crate::input::set_ui_active(on) };
+    }
+}
+
+/// Any thread: `owner` (`OWN_*`) opens or closes its hold on keyboard and mouse.
+pub fn post_ui(owner: u32, open: bool) {
+    let hwnd = HWND(crate::host::WINDOW.load(Ordering::Relaxed) as _);
+    unsafe {
+        let _ = PostMessageW(Some(hwnd), if open { WM_UI_OPEN } else { WM_UI_CLOSE }, WPARAM(owner as usize), LPARAM(0));
     }
 }
 
@@ -121,12 +160,8 @@ fn lparam_pos(lp: LPARAM) -> egui::Pos2 {
 /// Window-procedure hook, called before input.rs. `Some` = handled.
 pub unsafe fn window_message(_hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> Option<LRESULT> {
     match msg {
-        WM_UI_OPEN => {
-            set_active(true);
-            return Some(LRESULT(0));
-        }
-        WM_UI_CLOSE => {
-            set_active(false);
+        WM_UI_OPEN | WM_UI_CLOSE => {
+            set_owner(wp.0 as u32, msg == WM_UI_OPEN);
             return Some(LRESULT(0));
         }
         settings_apply::WM_UI_DISPLAY => {

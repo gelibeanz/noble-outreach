@@ -18,11 +18,14 @@ const RVA_LAST_DEVICE: usize = 0x2dfbe74;
 static GAME_TLS: AtomicUsize = AtomicUsize::new(0);
 /// Listen server: the host's player has had a unit this game (starts the address banner once).
 static SPAWNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Medal names read for this game (stats.rs, once the map is up).
+static MEDALS_NAMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Between two games in one process (seamless.rs): the next engine has a new game thread (TLS block).
 pub fn reset() {
     GAME_TLS.store(0, Ordering::Relaxed);
     SPAWNED.store(false, Ordering::Relaxed);
+    MEDALS_NAMED.store(false, Ordering::Relaxed);
 }
 
 /// Called on the game thread every input poll (host slot 36, player 0).
@@ -31,7 +34,14 @@ pub unsafe fn game_tick() {
     if base == 0 {
         return;
     }
-    if GAME_TLS.load(Ordering::Relaxed) != 0 {
+    let block = GAME_TLS.load(Ordering::Relaxed);
+    if block != 0 {
+        // The players table has someone: the map's tags are loaded, so the medal block can be named.
+        if !MEDALS_NAMED.load(Ordering::Relaxed) && !board().rows.is_empty() {
+            MEDALS_NAMED.store(true, Ordering::Relaxed);
+            crate::stats::init_medal_names(base);
+        }
+        crate::stats::debug_tick(base, block);
         // Listen server: the address banner starts when the host's player first has a unit.
         if !SPAWNED.load(Ordering::Relaxed) && crate::input::player0_view().is_some_and(|v| v.unit != u32::MAX && v.unit >> 16 != 0) {
             SPAWNED.store(true, Ordering::Relaxed);
@@ -145,16 +155,8 @@ pub struct Row {
     pub local: bool,
 }
 
-/// Game-results player table (live during the game, filled by the per-tick results update 0x1800f88d0): 16 entries
-/// of 0xD8 at 0x1828c82a8, u8 in use at +0, u64 xuid at +7. Statistics of entry k: 0x1828c9200 + k * 0x708, s16 per
-/// statistic in the order of the definition table at 0x180b016f0 (games-played, games-completed, games-won,
-/// games-tied, rounds-completed, rounds-won, in-round-score, in-game-total-score, kills, assists, deaths, betrayals,
-/// suicides, most-kills-in-a-row, seconds-alive, ...). notes/frontend.md "Tab scoreboard".
-const RVA_RESULT_PLAYERS: usize = 0x28c82a8;
-const RVA_RESULT_STATS: usize = 0x28c9200;
-const STAT_KILLS: usize = 8;
-const STAT_ASSISTS: usize = 9;
-const STAT_DEATHS: usize = 10;
+/// Kills / deaths / assists come from the engine's live game results (stats.rs, notes/frontend.md "Game statistics").
+use crate::stats::{STAT_ASSISTS, STAT_DEATHS, STAT_KILLS};
 
 /// What the panel shows.
 pub struct Board {
@@ -163,6 +165,8 @@ pub struct Board {
     pub teams: bool,
     /// Team scores (s16 at the score table +0x80 + team * 8, +2 for the round score), teams 0..7.
     pub team_scores: [i32; 8],
+    /// Firefight game (score = the metagame score, stats.rs `firefight_score`).
+    pub firefight: bool,
 }
 
 /// Engine player table (TLS +0x18 data array, datum 0x490 bytes at +0x50; salt u16 at +0x00 non-zero = in use):
@@ -170,7 +174,7 @@ pub struct Board {
 /// 0x180079b20): game-engine globals TLS +0x20, valid while +0x841C is 1..4, s16 at +0x3270 + index*8
 /// (+2 when TLS +0x48 → +0x1EAB8 is set: round score). Kills/deaths/assists: game results (above), by xuid.
 pub fn board() -> Board {
-    let mut b = Board { rows: Vec::new(), teams: false, team_scores: [0; 8] };
+    let mut b = Board { rows: Vec::new(), teams: false, team_scores: [0; 8], firefight: false };
     let block = GAME_TLS.load(Ordering::Relaxed);
     let base = crate::crash::ENGINE_BASE.load(Ordering::Relaxed);
     if block == 0 || base == 0 {
@@ -197,12 +201,8 @@ pub fn board() -> Board {
                 b.team_scores[t] = ((s + 0x80 + t * 8) as *const i16).read_volatile() as i32;
             }
         }
-        let stats_of = |xuid: u64| -> Option<usize> {
-            (0..16).find(|k| {
-                let e = base + RVA_RESULT_PLAYERS + k * 0xd8;
-                (e as *const u8).read_volatile() != 0 && ((e + 7) as *const u64).read_unaligned() == xuid
-            }).map(|k| base + RVA_RESULT_STATS + k * 0x708)
-        };
+        b.firefight = crate::stats::options_mode(block) == Some(crate::stats::MODE_SURVIVAL);
+        let stats_of = |xuid: u64| crate::stats::block_of(base, xuid);
         let me = crate::host::LOCAL_XUID.load(Ordering::Relaxed);
         let host_counts = crate::ping::host_counts();
         for i in 0..16usize {
@@ -213,7 +213,7 @@ pub fn board() -> Board {
             let name: Vec<u16> = (0..16).map(|k| ((p + 0xb0 + 2 * k) as *const u16).read_volatile()).take_while(|&c| c != 0).collect();
             let xuid = ((p + 0x08) as *const u64).read_unaligned();
             let st = stats_of(xuid);
-            let stat = |n: usize| st.map_or(0, |a| ((a + 2 * n) as *const i16).read_volatile() as i32);
+            let stat = |n: usize| st.map_or(0, |a| crate::stats::word(a, n));
             let net = crate::ping::entry(xuid);
             // A client's own statistics miss deaths it did not see: the host's counts win when it sends them.
             let host = net.filter(|e| host_counts && e.kills != crate::ping::NO_COUNTS);
@@ -221,7 +221,12 @@ pub fn board() -> Board {
                 name: String::from_utf16_lossy(&name),
                 xuid,
                 team: ((p + 0xad) as *const i8).read_volatile(),
-                score: scores.map_or(0, |s| ((s + i * 8) as *const i16).read_volatile() as i32),
+                // Firefight keeps the score table at 0: its score is the campaign metagame's (HUD survival score).
+                score: if b.firefight {
+                    crate::stats::firefight_score(block, xuid).unwrap_or(0)
+                } else {
+                    scores.map_or(0, |s| ((s + i * 8) as *const i16).read_volatile() as i32)
+                },
                 kills: host.map_or(stat(STAT_KILLS), |e| e.kills as i32),
                 deaths: host.map_or(stat(STAT_DEATHS), |e| e.deaths as i32),
                 assists: host.map_or(stat(STAT_ASSISTS), |e| e.assists as i32),
@@ -245,7 +250,7 @@ pub fn rows() -> Vec<Row> {
 }
 
 /// Team colours (Reach's red, blue, green, orange, purple, gold, brown, pink).
-fn team_colour(t: i8) -> egui::Color32 {
+pub(super) fn team_colour(t: i8) -> egui::Color32 {
     const C: [(u8, u8, u8); 8] = [(200, 50, 50), (50, 100, 210), (60, 160, 60), (230, 130, 30), (140, 70, 190), (210, 180, 40), (130, 90, 50), (220, 110, 170)];
     match C.get(t as usize) {
         Some(&(r, g, b)) if t >= 0 => egui::Color32::from_rgb(r, g, b),
@@ -253,7 +258,7 @@ fn team_colour(t: i8) -> egui::Color32 {
     }
 }
 
-const TEAM_NAMES: [&str; 8] = ["RED", "BLUE", "GREEN", "ORANGE", "PURPLE", "GOLD", "BROWN", "PINK"];
+pub(super) const TEAM_NAMES: [&str; 8] = ["RED", "BLUE", "GREEN", "ORANGE", "PURPLE", "GOLD", "BROWN", "PINK"];
 
 static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// Interactive (mouse) mode: right-click while Tab is held. The UI then owns the mouse (cursor freed, game input
@@ -268,7 +273,7 @@ static NOTICE: std::sync::Mutex<Option<(String, std::time::Instant)>> = std::syn
 fn unpin() {
     if PINNED.swap(false, Ordering::Relaxed) {
         *MENU.lock().unwrap_or_else(|e| e.into_inner()) = None;
-        super::post_to_window(super::WM_UI_CLOSE);
+        super::post_ui(super::OWN_SCOREBOARD, false);
         log!("scoreboard: mouse mode off");
     }
 }
@@ -284,7 +289,7 @@ pub fn visible() -> bool {
     let rmb = crate::input::mouse_buttons() & 4 != 0;
     if LAST_RMB.swap(rmb, Ordering::Relaxed) != rmb && rmb && h && !PINNED.load(Ordering::Relaxed) && !super::active() {
         PINNED.store(true, Ordering::Relaxed);
-        super::post_to_window(super::WM_UI_OPEN);
+        super::post_ui(super::OWN_SCOREBOARD, true);
         log!("scoreboard: mouse mode on (right-click while Tab held)");
     }
     PINNED.load(Ordering::Relaxed) || h
@@ -359,7 +364,7 @@ fn num_x(right: f32, k: usize) -> f32 {
 }
 
 /// `theme::panel_fit`, centred on `top.x` (panel_fit's Align::Center puts the panel's centre a quarter width right).
-fn fit_centered<R>(ui: &mut egui::Ui, top: egui::Pos2, width: f32, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+pub(super) fn fit_centered<R>(ui: &mut egui::Ui, top: egui::Pos2, width: f32, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     use super::theme;
     const PAD: f32 = 22.0;
     let bg = ui.painter().add(egui::Shape::Noop);

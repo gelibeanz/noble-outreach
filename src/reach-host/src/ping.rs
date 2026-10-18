@@ -106,6 +106,7 @@ pub fn start(instance: u32, players: u32) {
         let mut last_counts = Vec::new();
         loop {
             std::thread::sleep(Duration::from_secs(1));
+            crate::stats::tick(); // game over: build and send the carnage report
             let ping = encode_ping(now_us());
             for a in crate::net::active_peer_addrs(Duration::from_secs(4)) {
                 crate::net::send_raw(a, &ping);
@@ -211,6 +212,11 @@ pub fn entry(xuid: u64) -> Option<Entry> {
         return None;
     }
     t.get(&xuid).copied()
+}
+
+/// This process is the networked host (instance 0, listen or dedicated) and sends the tables.
+pub fn is_host() -> bool {
+    HOST.load(Ordering::Relaxed)
 }
 
 /// True on a client that has a fresh table from its host (its counts beat the client's own).

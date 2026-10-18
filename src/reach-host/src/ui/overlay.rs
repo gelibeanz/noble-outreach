@@ -59,13 +59,13 @@ pub fn open() {
         OPENS.fetch_add(1, Ordering::Relaxed);
         *STATE.lock().unwrap_or_else(|e| e.into_inner()) = State { page: Page::Main, settings: None };
         crate::callvote::request_caps(); // CALL A VOTE greys out what the host cannot run
-        super::post_to_window(super::WM_UI_OPEN);
+        super::post_ui(super::OWN_OVERLAY, true);
     }
 }
 
 fn close() {
     if OPEN.swap(false, Ordering::Relaxed) {
-        super::post_to_window(super::WM_UI_CLOSE);
+        super::post_ui(super::OWN_OVERLAY, false);
     }
 }
 
@@ -160,6 +160,7 @@ pub unsafe fn end_frame(swapchain: *mut c_void) {
 
 /// Overlay closed: draw the non-interactive layers (listen-server address banner / join toast, Tab scoreboard).
 unsafe fn passive_frame(swapchain: *mut c_void) {
+    crate::stats::tick(); // game over: the carnage report (host: also sent to the peers)
     let hosting = super::hostinfo::hosting();
     if hosting {
         let names: Vec<String> = super::scoreboard::rows().into_iter().map(|r| r.name).collect();
@@ -172,10 +173,12 @@ unsafe fn passive_frame(swapchain: *mut c_void) {
         super::scoreboard::hidden();
     }
     let vote = super::vote::current();
+    // Game over: the carnage report page (the vote page shows it as a tab instead).
+    let carnage = super::carnage::current().filter(|_| !vote.as_ref().is_some_and(super::vote::page_up));
     let nat = crate::nat::client_status(); // joiner: "Connected to the host (NAT punch)" etc.
     let lobby = crate::lobby::waiting_view(); // campaign lobby gathering (listen host, or joined to a dedicated server)
     let forge_saved = crate::forge::last_status().is_some(); // "Saved '<name>'" toast after a Forge save
-    if banner <= 0.0 && toast.is_none() && !scores && vote.is_none() && nat.is_none() && lobby.is_none() && !forge_saved {
+    if banner <= 0.0 && toast.is_none() && !scores && vote.is_none() && carnage.is_none() && nat.is_none() && lobby.is_none() && !forge_saved {
         return;
     }
     let Some(sc) = IDXGISwapChain::from_raw_borrowed(&swapchain) else { return };
@@ -187,6 +190,9 @@ unsafe fn passive_frame(swapchain: *mut c_void) {
         }
         if let Some((name, a)) = &toast {
             join_toast(ui, name, *a, if banner > 0.0 { 184.0 } else { 16.0 });
+        }
+        if let Some(r) = &carnage {
+            super::carnage::page(ui, r);
         }
         if scores {
             super::scoreboard::draw(ui);
@@ -208,6 +214,9 @@ unsafe fn passive_frame(swapchain: *mut c_void) {
     }
     if let Some(v) = &vote {
         super::vote::after_draw(swapchain, v);
+    }
+    if let Some(r) = &carnage {
+        super::carnage::after_draw(swapchain, r);
     }
 }
 

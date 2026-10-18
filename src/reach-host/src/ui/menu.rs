@@ -47,7 +47,7 @@ pub const MAPS: &[(&str, &str)] = &[
 ];
 
 /// Firefight maps: (mapinfo stem, name shown; checked against each file's English title).
-const FF_MAPS: &[(&str, &str)] = &[
+pub(super) const FF_MAPS: &[(&str, &str)] = &[
     ("ff50_park", "Beachhead"),
     ("ff10_prototype", "Overlook"),
     ("ff20_courtyard", "Courtyard"),
@@ -74,14 +74,7 @@ const MISSIONS: &[(&str, &str)] = &[
     ("m70_bonus", "Lone Wolf"),
 ];
 
-const DIFFICULTIES: &[(&str, &str)] = &[("easy", "Easy"), ("normal", "Normal"), ("heroic", "Heroic"), ("legendary", "Legendary")];
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum PlayMode {
-    Multiplayer,
-    Firefight,
-    Campaign,
-}
+pub(super) const DIFFICULTIES: &[(&str, &str)] = &[("easy", "Easy"), ("normal", "Normal"), ("heroic", "Heroic"), ("legendary", "Legendary")];
 
 /// `hr_ff_generatorDefense_1set.bin` -> `Generator Defense`.
 pub(super) fn ff_variant_title(file: &str) -> String {
@@ -144,22 +137,7 @@ struct Menu {
     mcc: PathBuf,
     screen: Screen,
     settings: Settings,
-    maps: Vec<(&'static str, &'static str)>,
-    variants: Vec<String>,
-    map: usize,
-    variant: usize,
-    mode: PlayMode,
-    ff_maps: Vec<(&'static str, &'static str)>,
-    ff_variants: Vec<String>,
-    ff_map: usize,
-    ff_variant: usize,
-    missions: Vec<(&'static str, &'static str)>,
-    mission: usize,
-    difficulty: usize,
-    /// Players for hosted Firefight / campaign co-op (the multiplayer host form uses the saved setting).
-    coop_players: u32,
     browser: super::browser_screen::BrowserScreen,
-    error: String,
     choice: Option<Choice>,
     /// The SETTINGS screen while it is open (settings_screen.rs; it saves and applies on its own).
     settings_screen: Option<super::settings_screen::SettingsScreen>,
@@ -169,68 +147,30 @@ struct Menu {
     campaign: Option<super::campaign::CampaignScreen>,
     /// The FORGE screen (ui/forge.rs).
     forge: Option<super::forge::ForgeScreen>,
-    /// Play / Host multiplayer: saved Forge map variant to play on (None = the map's default).
-    map_variant: Option<PathBuf>,
+    /// PLAY and HOST GAME (play_screen.rs): one screen, `host` switches the SERVER step on.
+    mp: super::play_screen::PlayScreen,
 }
 
 impl Menu {
     fn new(mcc: &Path) -> Self {
         let settings = settings::get();
-        let maps: Vec<_> = MAPS
-            .iter()
-            .copied()
-            .filter(|m| mcc.join("haloreach").join("maps").join("info").join(format!("{}.mapinfo", m.0)).is_file())
-            .collect();
-        let mut variants: Vec<String> = std::fs::read_dir(mcc.join("haloreach").join("game_variants"))
-            .map(|d| {
-                d.filter_map(|e| e.ok())
-                    .map(|e| e.file_name().to_string_lossy().into_owned())
-                    .filter(|n| n.ends_with(".bin") && !n.starts_with("hr_ff_")) // hr_ff_*: Firefight
-                    .collect()
-            })
-            .unwrap_or_default();
-        variants.sort_by_key(|v| variant_title(v).to_lowercase());
-        let has_map = |stem: &&(&str, &str)| mcc.join("haloreach").join("maps").join("info").join(format!("{}.mapinfo", stem.0)).is_file();
-        let ff_maps: Vec<_> = FF_MAPS.iter().filter(has_map).copied().collect();
-        let missions: Vec<_> = MISSIONS.iter().filter(has_map).copied().collect();
-        let mut ff_variants: Vec<String> = std::fs::read_dir(mcc.join("haloreach").join("game_variants"))
-            .map(|d| d.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| n.starts_with("hr_ff_") && n.ends_with(".bin")).collect())
-            .unwrap_or_default();
-        ff_variants.sort_by_key(|v| ff_variant_title(v).to_lowercase());
-        let ff_variant = ff_variants.iter().position(|v| v == "hr_ff_standard_1set.bin").unwrap_or(0);
-        log!("menu: {} maps, {} game variants in {}", maps.len(), variants.len(), mcc.display());
-        let map = maps.iter().position(|m| m.0 == settings.last_map).unwrap_or(0);
-        let variant = variants.iter().position(|v| *v == settings.last_variant).unwrap_or(0);
+        let mut mp = super::play_screen::PlayScreen::new(mcc, &settings);
+        if let Ok(spec) = std::env::var("REACH_UI_MP") {
+            mp.apply_test(&spec);
+        }
+        log!("menu: {} in {}", mp.summary(), mcc.display());
         Menu {
             mcc: mcc.to_path_buf(),
             screen: Screen::Home,
             settings,
-            maps,
-            variants,
-            map,
-            variant,
-            mode: PlayMode::Multiplayer,
-            ff_maps,
-            ff_variants,
-            ff_map: 0,
-            ff_variant,
-            missions,
-            mission: 0,
-            difficulty: 1,
-            coop_players: 2,
             browser: super::browser_screen::BrowserScreen::new(mcc),
-            error: String::new(),
             choice: None,
             settings_screen: None,
             customize: None,
             campaign: None,
             forge: None,
-            map_variant: None,
+            mp,
         }
-    }
-
-    fn variant_path(&self, file: &str) -> PathBuf {
-        self.mcc.join("haloreach").join("game_variants").join(file)
     }
 
     fn remember_selection(&mut self) {
@@ -240,11 +180,8 @@ impl Menu {
         s.host_max_players = self.settings.host_max_players;
         s.host_register = self.settings.host_register;
         s.host_port = self.settings.host_port;
+        self.mp.remember(&mut s);
         self.settings = s;
-        if let (Some(m), Some(v)) = (self.maps.get(self.map), self.variants.get(self.variant)) {
-            self.settings.last_map = m.0.into();
-            self.settings.last_variant = v.clone();
-        }
         settings::save(&self.settings);
     }
 
@@ -253,47 +190,20 @@ impl Menu {
         self.choice = Some(Choice::Launch(args));
     }
 
-    /// Mode flags for Firefight / campaign (`--firefight M [--game-variant V]`, `--campaign M`, `--difficulty D`).
-    fn coop_args(&self) -> Option<Vec<String>> {
-        let d = DIFFICULTIES[self.difficulty].0.to_string();
-        Some(match self.mode {
-            PlayMode::Firefight => {
-                let m = self.ff_maps.get(self.ff_map)?;
-                let v = self.ff_variants.get(self.ff_variant)?;
-                vec!["--firefight".into(), m.0.into(), "--difficulty".into(), d, "--game-variant".into(), self.variant_path(v).to_string_lossy().into_owned()]
-            }
-            PlayMode::Campaign => {
-                let m = self.missions.get(self.mission)?;
-                vec!["--campaign".into(), m.0.into(), "--difficulty".into(), d, "--insertion".into(), "0".into()]
-            }
-            PlayMode::Multiplayer => return None,
-        })
-    }
-
     fn play_args(&self) -> Option<Vec<String>> {
-        if self.mode != PlayMode::Multiplayer {
-            return self.coop_args();
-        }
-        let m = self.maps.get(self.map)?;
-        let v = self.variants.get(self.variant)?;
-        let mut a = vec!["--map".into(), m.0.into(), "--game-variant".into(), self.variant_path(v).to_string_lossy().into_owned()];
-        a.extend(self.map_variant_args());
-        Some(a)
-    }
-
-    /// `--map-variant <file>` when a saved Forge map is picked for the selected map.
-    fn map_variant_args(&self) -> Vec<String> {
-        match (&self.map_variant, self.maps.get(self.map)) {
-            (Some(p), Some(m)) if crate::forge::map_of(p).is_none_or(|s| s == m.0) => vec!["--map-variant".into(), p.to_string_lossy().into_owned()],
-            _ => Vec::new(),
-        }
+        self.mp.args()
     }
 
     fn open(&mut self, s: Screen) {
-        self.error.clear();
         self.screen = s;
         if s == Screen::Browser {
             self.browser.open();
+        }
+        if matches!(s, Screen::Play | Screen::Host) {
+            self.mp.host = s == Screen::Host;
+            if self.mp.step == super::play_screen::Step::Server && !self.mp.host {
+                self.mp.step = super::play_screen::Step::Map;
+            }
         }
     }
 
@@ -317,7 +227,7 @@ impl Menu {
         c
     }
 
-    /// Listen-server flags from the Host form (port, master) around `mode_args` (CAMPAIGN screen's HOST CO-OP).
+    /// Listen-server flags from the Host form (port, master) around `mode_args` (HOST GAME, HOST CO-OP, HOST FORGE).
     fn listen_args(&self, players: u32, mode_args: Vec<String>) -> Vec<String> {
         let port = if self.settings.host_port == 0 { 47800 } else { self.settings.host_port };
         let mut a: Vec<String> = vec!["--listen".into(), "--players".into(), players.clamp(2, 16).to_string(), "--bind".into(), format!("0.0.0.0:{port}")];
@@ -328,23 +238,9 @@ impl Menu {
         a
     }
 
+    /// HOST GAME's listen-server flags for the current pick.
     fn host_args(&self) -> Option<Vec<String>> {
-        let players = if self.mode == PlayMode::Multiplayer { self.settings.host_max_players } else { self.coop_players };
-        // Listen server: the game starts at once with the host playing; friends join in progress (main.rs --listen).
-        let port = if self.settings.host_port == 0 { 47800 } else { self.settings.host_port };
-        let mut a: Vec<String> = vec!["--listen".into(), "--players".into(), players.clamp(2, 16).to_string(), "--bind".into(), format!("0.0.0.0:{port}")];
-        if self.mode == PlayMode::Multiplayer {
-            let m = self.maps.get(self.map)?;
-            let v = self.variants.get(self.variant)?;
-            a.extend(["--map".into(), m.0.into(), "--game-variant".into(), self.variant_path(v).to_string_lossy().into_owned()]);
-            a.extend(self.map_variant_args());
-        } else {
-            a.extend(self.coop_args()?);
-        }
-        if self.settings.host_register {
-            a.extend(["--master".into(), crate::browser::master_list().join(","), "--server-name".into(), self.settings.host_name.clone()]);
-        }
-        Some(a)
+        Some(self.listen_args(self.mp.host_players(&self.settings), self.mp.args()?))
     }
 
     // ---- Drawing ---------------------------------------------------------------------------------------------
@@ -352,7 +248,7 @@ impl Menu {
     fn ui(&mut self, ui: &mut Ui) {
         theme::backdrop(ui);
         let full = ui.max_rect();
-        if matches!(self.screen, Screen::Home | Screen::Play | Screen::Host) {
+        if self.screen == Screen::Home {
             super::menu_scene::draw(ui, full, &self.mcc, &self.settings); // live Spartan or still art
         }
         if self.screen == Screen::Settings {
@@ -369,6 +265,23 @@ impl Menu {
                 super::browser_screen::Action::None => {}
                 super::browser_screen::Action::Back => self.open(Screen::Home),
                 super::browser_screen::Action::Launch(a) => self.launch(a),
+            }
+            return;
+        }
+        if matches!(self.screen, Screen::Play | Screen::Host) {
+            use super::play_screen::Action;
+            match self.mp.ui(ui, &mut self.settings) {
+                Action::None => {}
+                Action::Back => self.open(Screen::Home),
+                Action::Play(a) => {
+                    self.remember_selection();
+                    self.launch(a);
+                }
+                Action::Host { players, args } => {
+                    self.remember_selection();
+                    let a = self.listen_args(players, args);
+                    self.launch(a);
+                }
             }
             return;
         }
@@ -403,11 +316,8 @@ impl Menu {
             }
             return;
         }
-        if ui.input(|i| i.key_pressed(egui::Key::Escape)) && self.screen != Screen::Home {
-            self.open(Screen::Home);
-        }
 
-        // Left column: title + navigation.
+        // Home: left column with title + navigation, the ready card.
         let nav = Rect::from_min_size(full.min + Vec2::new(40.0, 48.0), Vec2::new(300.0, full.height() - 96.0));
         ui.scope_builder(egui::UiBuilder::new().max_rect(nav), |ui| {
             ui.label(egui::RichText::new("HALO: REACH").size(15.0).color(ACCENT));
@@ -426,230 +336,33 @@ impl Menu {
             ui.add_space((ui.available_height() - 24.0).max(0.0));
             ui.label(egui::RichText::new(format!("{}  ·  v{}", self.settings.player_name, env!("CARGO_PKG_VERSION"))).size(13.0).color(DIM));
         });
-
         let content = Rect::from_min_max(egui::pos2(nav.right() + 40.0, full.top() + 40.0), full.max - Vec2::new(40.0, 40.0));
-        if self.screen == Screen::Home {
-            self.home(ui, content);
-            return;
-        }
-        theme::panel(ui, content, |ui| {
-            let title = match self.screen {
-                Screen::Play => "Play",
-                Screen::Browser => "",
-                Screen::Host => "Host game",
-                Screen::Settings => "Settings",
-                Screen::Customize | Screen::Campaign | Screen::Forge | Screen::Home => "",
-            };
-            let top = ui.max_rect();
-            // Top-right BACK in a child that does not move the heading down.
-            let mut back = ui.new_child(egui::UiBuilder::new().max_rect(Rect::from_min_size(egui::pos2(top.right() - 76.0, top.top()), Vec2::new(76.0, 36.0))));
-            if theme::ghost_button(&mut back, "Back").clicked() {
-                self.open(Screen::Home);
-            }
-            theme::heading(ui, title);
-            if !self.error.is_empty() {
-                ui.label(egui::RichText::new(&self.error).color(egui::Color32::from_rgb(255, 120, 90)));
-            }
-            match self.screen {
-                Screen::Play => self.play(ui),
-                Screen::Host => self.host(ui),
-                Screen::Browser | Screen::Settings | Screen::Customize | Screen::Campaign | Screen::Forge | Screen::Home => {}
-            }
-        });
+        self.home(ui, content);
     }
 
     fn home(&mut self, ui: &mut Ui, content: Rect) {
         let card = Rect::from_min_size(egui::pos2(content.left(), content.bottom() - 210.0), Vec2::new(content.width().min(560.0), 210.0));
         theme::panel(ui, card, |ui| {
             theme::caption(ui, "Ready");
-            ui.label(egui::RichText::new(format!("{} maps · {} game types found in your MCC files", self.maps.len(), self.variants.len())).size(18.0));
+            let c = crate::catalog::get(&self.mcc);
+            let nv: usize = c.maps.iter().map(|m| m.variants.len() - 1).sum();
+            ui.label(egui::RichText::new(format!("{} maps · {} map variants · {} game types in your MCC files", c.maps.len(), nv, c.games.len())).size(17.0));
             ui.add_space(6.0);
             ui.label(egui::RichText::new(format!("Playing as {}", self.settings.player_name)).color(DIM));
             let ms = crate::browser::master_list();
             let ml = if ms.is_empty() { "Master server: none (Direct Connect, Favourites and LAN)".to_string() } else { format!("Master server {}", ms.join(" or ")) };
             ui.label(egui::RichText::new(ml).color(DIM));
             ui.add_space(10.0);
-            if let Some(m) = self.maps.get(self.map) {
-                let v = self.variants.get(self.variant).map(|v| variant_title(v)).unwrap_or_default();
-                if theme::primary_button(ui, &format!("Quick play: {v} on {}", m.1), 420.0, true).clicked() {
-                    if let Some(a) = self.play_args() {
-                        self.launch(a);
-                    }
-                }
-            }
-        });
-    }
-
-    /// Mode tabs (multiplayer / Firefight / campaign).
-    fn mode_tabs(&mut self, ui: &mut Ui) {
-        ui.horizontal(|ui| {
-            for (label, m) in [("Multiplayer", PlayMode::Multiplayer), ("Firefight", PlayMode::Firefight), ("Campaign", PlayMode::Campaign)] {
-                let on = self.mode == m;
-                let clicked = if on { theme::primary_button(ui, label, 170.0, true) } else { theme::ghost_button(ui, label) }.clicked();
-                if clicked {
-                    self.mode = m;
-                }
-            }
-        });
-        ui.add_space(6.0);
-    }
-
-    fn difficulty_row(&mut self, ui: &mut Ui) {
-        ui.horizontal(|ui| {
-            theme::caption(ui, "Difficulty");
-            for (i, d) in DIFFICULTIES.iter().enumerate() {
-                let clicked = if self.difficulty == i { theme::primary_button(ui, d.1, 110.0, true) } else { theme::ghost_button(ui, d.1) }.clicked();
-                if clicked {
-                    self.difficulty = i;
-                }
-            }
-        });
-        ui.add_space(6.0);
-    }
-
-    /// Map and game-type pickers side by side (campaign: mission list and a note); updates the selection of the
-    /// current mode.
-    fn pickers(&mut self, ui: &mut Ui, height: f32) {
-        if self.mode != PlayMode::Multiplayer {
-            self.difficulty_row(ui);
-        }
-        let height = if self.mode != PlayMode::Multiplayer { height - 44.0 } else { height };
-        let r = ui.available_rect_before_wrap();
-        let w = (r.width() - 20.0) / 2.0;
-        let left = Rect::from_min_size(r.min, Vec2::new(w, height));
-        let right = Rect::from_min_size(r.min + Vec2::new(w + 20.0, 0.0), Vec2::new(w, height));
-        let (maps, map_sel, title) = match self.mode {
-            PlayMode::Multiplayer => (&self.maps, &mut self.map, "Map"),
-            PlayMode::Firefight => (&self.ff_maps, &mut self.ff_map, "Map"),
-            PlayMode::Campaign => (&self.missions, &mut self.mission, "Mission"),
-        };
-        ui.scope_builder(egui::UiBuilder::new().max_rect(left), |ui| {
-            theme::caption(ui, title);
-            egui::ScrollArea::vertical().id_salt("maps").max_height(height - 24.0).show(ui, |ui| {
-                for (i, m) in maps.iter().enumerate() {
-                    if theme::list_row(ui, &[(0.0, m.1.to_string())], i == *map_sel, 30.0).clicked() {
-                        *map_sel = i;
-                    }
-                }
-            });
-        });
-        let mode = self.mode;
-        ui.scope_builder(egui::UiBuilder::new().max_rect(right), |ui| {
-            if mode == PlayMode::Campaign {
-                theme::caption(ui, "Insertion point");
-                theme::list_row(ui, &[(0.0, "Start of the mission".to_string())], true, 30.0);
-                ui.add_space(10.0);
-                ui.label(egui::RichText::new("Co-op: everyone plays the same mission. No saves yet: leaving ends the run.").size(13.0).color(DIM));
-                return;
-            }
-            let (variants, sel): (Vec<String>, &mut usize) = if mode == PlayMode::Firefight {
-                (self.ff_variants.iter().map(|v| ff_variant_title(v)).collect(), &mut self.ff_variant)
-            } else {
-                (self.variants.iter().map(|v| variant_title(v)).collect(), &mut self.variant)
-            };
-            theme::caption(ui, "Game type");
-            egui::ScrollArea::vertical().id_salt("variants").max_height(height - 24.0).show(ui, |ui| {
-                for (i, v) in variants.into_iter().enumerate() {
-                    if theme::list_row(ui, &[(0.0, v)], i == *sel, 30.0).clicked() {
-                        *sel = i;
-                    }
-                }
-            });
-        });
-        ui.advance_cursor_after_rect(Rect::from_min_size(r.min, Vec2::new(r.width(), height)));
-    }
-
-    /// One-line summary of the current pick, for the footer next to the start button.
-    fn summary(&self) -> String {
-        match self.mode {
-            PlayMode::Multiplayer => match (self.maps.get(self.map), self.variants.get(self.variant)) {
-                (Some(m), Some(v)) => format!("{} on {}", variant_title(v), m.1),
-                _ => String::new(),
-            },
-            PlayMode::Firefight => match (self.ff_maps.get(self.ff_map), self.ff_variants.get(self.ff_variant)) {
-                (Some(m), Some(v)) => format!("Firefight {} on {} · {}", ff_variant_title(v), m.1, DIFFICULTIES[self.difficulty].1),
-                _ => String::new(),
-            },
-            PlayMode::Campaign => match self.missions.get(self.mission) {
-                Some(m) => format!("Campaign {} · {}", m.1, DIFFICULTIES[self.difficulty].1),
-                None => String::new(),
-            },
-        }
-    }
-
-    fn play(&mut self, ui: &mut Ui) {
-        self.mode_tabs(ui);
-        self.forge_variant_row(ui);
-        let h = (ui.available_height() - 80.0).max(120.0);
-        self.pickers(ui, h);
-        ui.add_space(12.0);
-        ui.horizontal(|ui| {
             let a = self.play_args();
-            if theme::primary_button(ui, "Start game", 220.0, a.is_some()).clicked() {
-                if self.mode == PlayMode::Multiplayer {
-                    self.remember_selection();
-                }
+            let label = format!("Quick play: {}", self.mp.summary());
+            let w = ui.available_width().min(500.0);
+            if theme::primary_button(ui, &label, w, a.is_some()).clicked() {
                 if let Some(a) = a {
                     self.launch(a);
                 }
             }
-            ui.label(egui::RichText::new(format!("{} · local game, 1 player", self.summary())).color(DIM));
         });
     }
-
-    /// Multiplayer: pick one of your saved Forge maps for the selected map (ui/forge.rs).
-    fn forge_variant_row(&mut self, ui: &mut Ui) {
-        if self.mode != PlayMode::Multiplayer {
-            return;
-        }
-        if let Some(m) = self.maps.get(self.map) {
-            super::forge::variant_row(ui, m.0, &mut self.map_variant);
-        }
-    }
-
-    fn host(&mut self, ui: &mut Ui) {
-        self.mode_tabs(ui);
-        ui.horizontal(|ui| {
-            theme::caption(ui, "Server name");
-            ui.add(egui::TextEdit::singleline(&mut self.settings.host_name).desired_width(260.0).char_limit(48));
-            ui.add_space(20.0);
-            theme::caption(ui, if self.mode == PlayMode::Multiplayer { "Max players" } else { "Players" });
-            if self.mode == PlayMode::Multiplayer {
-                ui.add(egui::Slider::new(&mut self.settings.host_max_players, 2..=16));
-            } else {
-                ui.add(egui::Slider::new(&mut self.coop_players, 2..=4));
-            }
-        });
-        ui.horizontal(|ui| {
-            ui.checkbox(&mut self.settings.host_register, "Register with the master server");
-            ui.label(egui::RichText::new(&self.settings.master_url).color(DIM));
-        });
-        ui.horizontal(|ui| {
-            theme::caption(ui, "UDP port");
-            ui.add(egui::DragValue::new(&mut self.settings.host_port).range(1024..=65535));
-            ui.add_space(12.0);
-            let lan = super::hostinfo::lan_ip().map(|ip| format!("{ip}:{}", self.settings.host_port)).unwrap_or_else(|| "unknown".into());
-            ui.label(egui::RichText::new(format!("Friends add  {lan}  on your LAN; the master lists your internet address")).color(DIM));
-        });
-        ui.label(egui::RichText::new(super::hostinfo::reach_hint(self.settings.host_port)).size(12.5).color(DIM));
-        ui.add_space(6.0);
-        self.forge_variant_row(ui);
-        let h = (ui.available_height() - 80.0).max(120.0);
-        self.pickers(ui, h);
-        ui.add_space(12.0);
-        ui.horizontal(|ui| {
-            if theme::primary_button(ui, "Start hosting", 220.0, self.host_args().is_some()).clicked() {
-                if self.mode == PlayMode::Multiplayer {
-                    self.remember_selection();
-                }
-                if let Some(a) = self.host_args() {
-                    self.launch(a);
-                }
-            }
-            ui.label(egui::RichText::new(format!("{} · starts at once, friends join any time", self.summary())).color(DIM));
-        });
-    }
-
 }
 
 /// Run the menu until the player quits or picks a game. Uses (and leaves) the swap chain for the engine.
@@ -700,26 +413,30 @@ pub unsafe fn run(hwnd: HWND, sc: &IDXGISwapChain1, dc: &ID3D11DeviceContext, mc
                     capture = Some("ui-relaunched.bmp".to_string());
                 }
             } else {
-                while step < steps.len() && !matches!(steps[step].as_str(), "home" | "home-live" | "play-screen" | "play-ff" | "play-camp" | "host-ff" | "host-camp" | "browser" | "browser-fav" | "browser-cat" | "browser-sel" | "browser-direct" | "host" | "settings" | "play" | "play-ff-start" | "host-start" | "host-ff-start" | "host-camp-start" | "customize" | "forge" | "forge-saved" | "forge-start" | "forge-host")
+                while step < steps.len() && !matches!(steps[step].as_str(), "home" | "home-live" | "play-screen" | "play-map" | "play-ff" | "play-camp" | "host-ff" | "host-camp" | "host-map" | "host-server" | "browser" | "browser-fav" | "browser-cat" | "browser-sel" | "browser-direct" | "host" | "settings" | "play" | "play-ff-start" | "host-start" | "host-ff-start" | "host-camp-start" | "customize" | "forge" | "forge-saved" | "forge-start" | "forge-host")
                     && !steps[step].starts_with("settings-") && !steps[step].starts_with("customize-") && !steps[step].starts_with("campaign") {
                     step += 1;
                 }
                 match steps.get(step).map(|s| s.as_str()) {
                     None => {}
                     Some("play-ff-start") => {
-                        menu.mode = PlayMode::Firefight;
+                        menu.mp.select_game("hr_ff_standard_1set.bin");
                         if let Some(a) = menu.play_args() {
                             menu.launch(a);
                         }
                     }
                     Some(s @ ("host-start" | "host-ff-start" | "host-camp-start")) => {
-                        // Press START HOSTING on the Host screen with the saved form (listen server).
-                        menu.mode = match s {
-                            "host-ff-start" => PlayMode::Firefight,
-                            "host-camp-start" => PlayMode::Campaign,
-                            _ => PlayMode::Multiplayer,
+                        // Press START HOSTING on the Host screen with the saved form (listen server); campaign co-op
+                        // is HOST CO-OP on the CAMPAIGN screen.
+                        let a = match s {
+                            "host-camp-start" => menu.campaign_for_test().args().map(|a| menu.listen_args(2, a)),
+                            "host-ff-start" => {
+                                menu.mp.select_game("hr_ff_standard_1set.bin");
+                                menu.host_args()
+                            }
+                            _ => menu.host_args(),
                         };
-                        if let Some(a) = menu.host_args() {
+                        if let Some(a) = a {
                             menu.launch(a);
                         }
                     }
@@ -758,16 +475,21 @@ pub unsafe fn run(hwnd: HWND, sc: &IDXGISwapChain1, dc: &ID3D11DeviceContext, mc
                     }
                     Some(s) => {
                         if step_frames == 0 {
-                            menu.mode = match s {
-                                "play-ff" | "host-ff" => PlayMode::Firefight,
-                                "play-camp" | "host-camp" => PlayMode::Campaign,
-                                _ => PlayMode::Multiplayer,
+                            // play-screen / host: GAME TYPE step, play-map / host-map / play-ff / host-ff: MAP step,
+                            // host-server: SERVER step (REACH_UI_MP sets the picks and filters, play_screen.rs).
+                            if matches!(s, "play-ff" | "host-ff") {
+                                menu.mp.select_game("hr_ff_standard_1set.bin");
+                            }
+                            menu.mp.step = match s {
+                                "play-map" | "host-map" | "play-ff" | "host-ff" => super::play_screen::Step::Map,
+                                "host-server" => super::play_screen::Step::Server,
+                                _ => menu.mp.step,
                             };
                             menu.open(match s {
-                                "play-screen" | "play-ff" | "play-camp" => Screen::Play,
-                                "host-ff" | "host-camp" => Screen::Host,
+                                "play-screen" | "play-map" | "play-ff" => Screen::Play,
+                                "play-camp" | "host-camp" => Screen::Campaign,
                                 s if s.starts_with("browser") => Screen::Browser,
-                                "host" => Screen::Host,
+                                "host" | "host-ff" | "host-map" | "host-server" => Screen::Host,
                                 s if s.starts_with("customize") => Screen::Customize,
                                 s if s.starts_with("settings") => Screen::Settings,
                                 s if s.starts_with("campaign") => Screen::Campaign,

@@ -1165,6 +1165,13 @@ fn script_set(a: &[String]) {
             let f = |i: usize| a.get(i).and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0);
             crate::preview::set_view(f(1), f(2), f(3));
         }
+        // `set teleport <x> <y> <z> <yaw> [player] [pitch]`: move a player's biped there (default player 0; a host
+        // can move anyone; player 0 also gets the look pitch, radians). For tests that need two players face to face.
+        "teleport" => {
+            let f = |i: usize| a.get(i).and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0);
+            unsafe { crate::preview::teleport_player(n(5).max(0) as usize, [f(1), f(2), f(3), f(4)], f(6)) };
+            return;
+        }
         "spot" => {
             let f = |i: usize| a.get(i).and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0);
             crate::preview::set_spot([f(1), f(2), f(3), f(4)]);

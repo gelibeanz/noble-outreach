@@ -122,10 +122,10 @@ pub fn load(path: &Path, mcc: &Path) -> Result<(String, Vec<Entry>), String> {
         }
         if e.mode != "campaign" {
             let gv = e.game_variant.as_deref().ok_or(format!("{at}: game_variant missing (a file in {})", hr.join("game_variants").display()))?;
-            if !hr.join("game_variants").join(gv).is_file() {
-                return Err(format!("{at}: game variant {gv} not found in {}", hr.join("game_variants").display()));
+            if !crate::catalog::game_variant_path(mcc, gv).is_file() {
+                return Err(format!("{at}: game variant {gv} not found in {} or hopper_game_variants", hr.join("game_variants").display()));
             }
-            let ff_gv = gv.starts_with("hr_ff_");
+            let ff_gv = gv.starts_with("hr_ff_") || gv.starts_with("ff_");
             if ff_gv != (e.mode == "firefight") {
                 return Err(format!("{at}: game variant {gv} does not fit mode {}", e.mode));
             }
@@ -134,7 +134,7 @@ pub fn load(path: &Path, mcc: &Path) -> Result<(String, Vec<Entry>), String> {
             if e.mode != "slayer" {
                 return Err(format!("{at}: map_variant is for multiplayer entries only"));
             }
-            if !Path::new(mv).is_file() && !hr.join("map_variants").join(mv).is_file() {
+            if !crate::catalog::map_variant_path(mcc, mv).is_file() {
                 return Err(format!("{at}: map variant {mv} not found"));
             }
         }
@@ -205,11 +205,16 @@ pub fn write_next(entry: usize) -> Result<(), String> {
 }
 
 /// Mode/map flags dropped from the command line when a playlist entry replaces them.
-const MODE_FLAGS: &[&str] = &["--map", "--firefight", "--campaign", "--difficulty", "--game-variant", "--map-variant", "--insertion"];
+const MODE_FLAGS: &[&str] = &["--map", "--firefight", "--campaign", "--difficulty", "--game-variant", "--map-variant", "--insertion", "--checkpoint"];
 
 /// Command-line flags that play `e` (game variant as a full path under `mcc`).
+/// Co-op player cap from the raw arguments (`--coop-max N`, read before main parses them), 4 without it.
+fn coop_cap(argv: &[String]) -> u32 {
+    let i = argv.iter().position(|a| a == "--coop-max");
+    i.and_then(|i| argv.get(i + 1)).and_then(|v| v.parse::<u32>().ok()).map_or(4, |n| n.clamp(4, crate::coop::MAX))
+}
+
 pub fn entry_args(e: &Entry, mcc: &Path) -> Vec<String> {
-    let hr = mcc.join("haloreach");
     let mut a: Vec<String> = match e.mode.as_str() {
         "firefight" => vec!["--firefight".into(), e.map.clone()],
         "campaign" => vec!["--campaign".into(), e.map.clone()],
@@ -217,11 +222,11 @@ pub fn entry_args(e: &Entry, mcc: &Path) -> Vec<String> {
     };
     if e.mode != "campaign" {
         if let Some(gv) = &e.game_variant {
-            a.extend(["--game-variant".into(), hr.join("game_variants").join(gv).to_string_lossy().into_owned()]);
+            a.extend(["--game-variant".into(), crate::catalog::game_variant_path(mcc, gv).to_string_lossy().into_owned()]);
         }
     }
     if let Some(mv) = &e.map_variant {
-        let p = if Path::new(mv).is_file() { PathBuf::from(mv) } else { hr.join("map_variants").join(mv) };
+        let p = crate::catalog::map_variant_path(mcc, mv);
         a.extend(["--map-variant".into(), p.to_string_lossy().into_owned()]);
     }
     if e.mode != "slayer" {
@@ -273,12 +278,13 @@ pub fn apply(argv: &mut Vec<String>) -> Result<(), String> {
     log!("playlist: \"{name}\" ({} entries) from {path}; playing entry {} \"{}\" ({} on {}){}",
         entries.len(), current + 1, e.name, e.mode, e.map, if voted { ", chosen by vote" } else { "" });
     let mut new = entry_args(e, &mcc);
-    // Firefight and campaign are 4-player co-op modes (same cap as the Docker entrypoint).
+    // Firefight and campaign are 4-player co-op modes (same cap as the Docker entrypoint), or up to `--coop-max N`.
     if e.mode != "slayer" {
+        let cap = coop_cap(argv);
         if let Some(i) = argv.iter().position(|a| a == "--max-players") {
-            if argv.get(i + 1).and_then(|v| v.parse::<u32>().ok()).is_some_and(|n| n > 4) {
-                log!("playlist: {} entry, max players capped at 4", e.mode);
-                argv[i + 1] = "4".into();
+            if argv.get(i + 1).and_then(|v| v.parse::<u32>().ok()).is_some_and(|n| n > cap) {
+                log!("playlist: {} entry, max players capped at {cap}", e.mode);
+                argv[i + 1] = cap.to_string();
             }
         }
     }
@@ -319,6 +325,14 @@ mod tests {
             let q = pick(&v, 3, &[0]);
             assert!(!q.contains(&0));
         }
+    }
+
+    #[test]
+    fn coop_cap_from_args() {
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(coop_cap(&a(&["--dedicated"])), 4);
+        assert_eq!(coop_cap(&a(&["--coop-max", "6"])), 6);
+        assert_eq!(coop_cap(&a(&["--coop-max", "12"])), 8);
     }
 
     #[test]

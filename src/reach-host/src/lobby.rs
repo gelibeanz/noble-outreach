@@ -59,7 +59,7 @@ pub fn waiting_view() -> Option<(u32, u32, u32, bool)> {
 
 // ---- dedicated server -> clients: lobby status ---------------------------------------------------------------
 // `RLBY` v1, players u8, max u8, seconds left u8 (0 = mission starting). Sent about once a second while a dedicated
-// campaign server gathers, and three times when the mission starts. Clients without this code ignore it.
+// server or listen host gathers, and when the mission starts. Clients without this code ignore it.
 const MAGIC: [u8; 4] = *b"RLBY";
 static CLIENT_VIEW: std::sync::Mutex<Option<(u32, u32, u32, std::time::Instant)>> = std::sync::Mutex::new(None);
 static LAST_SEND_MS: AtomicU64 = AtomicU64::new(0);
@@ -145,7 +145,7 @@ pub unsafe fn tick(base: usize) {
     if players != prev {
         log!("lobby: {players}/{max} players gathered, mission starts in {} s or when full", left.div_ceil(1000));
     }
-    if !listen && now_ms() - LAST_SEND_MS.load(Ordering::Relaxed) >= 1000 {
+    if now_ms() - LAST_SEND_MS.load(Ordering::Relaxed) >= 1000 {
         LAST_SEND_MS.store(now_ms(), Ordering::Relaxed);
         broadcast_status(players, max, SECS_LEFT.load(Ordering::Relaxed));
     }
@@ -159,12 +159,28 @@ pub unsafe fn tick(base: usize) {
         log!("lobby: starting the mission with {players}/{max} players ({why})");
         RELEASED.store(true, Ordering::Relaxed);
         target.write_volatile(machines);
-        if !listen {
-            broadcast_status(players, max, 0); // clients drop the panel at once
-        }
+        broadcast_status(players, max, 0); // clients drop the panel at once
     } else {
         target.write_volatile(HOLD);
     }
+}
+
+/// Client in a gathering lobby: the joiner waits in launch state 11 sub-state 0 (`_map_state_none`), which the engine
+/// gives up on after 60 s (0x1800348dd: engine ms - 0x182b05c7c > 60000.0 at 0x180a8b5fc → exit reason 3), so a lobby
+/// longer than a minute dropped its first joiners. While the host's `RLBY` packets say it is still gathering, keep
+/// that start time fresh. Main loop, every pass.
+pub unsafe fn client_hold(base: usize) {
+    const SUB_STATE: usize = 0xc1a118;
+    const SUB_STATE_START_MS: usize = 0x2b05c7c;
+    const RVA_ENGINE_MS: usize = 0x11a84;
+    if waiting_view().is_none_or(|v| v.3) {
+        return;
+    }
+    if ((base + LAUNCH_STATE) as *const u32).read_volatile() != 11 || ((base + SUB_STATE) as *const u32).read_volatile() != 0 {
+        return;
+    }
+    let now: unsafe extern "system" fn() -> i32 = std::mem::transmute(base + RVA_ENGINE_MS);
+    ((base + SUB_STATE_START_MS) as *mut i32).write_volatile(now());
 }
 
 /// What a client sees when it tries to join a campaign server whose mission has started.
@@ -189,7 +205,7 @@ pub fn reset() {
     *CLIENT_VIEW.lock().unwrap_or_else(|e| e.into_inner()) = None;
 }
 
-unsafe fn patch_bytes(site: *mut u8, want: &[u8], new: &[u8]) -> bool {
+pub(crate) unsafe fn patch_bytes(site: *mut u8, want: &[u8], new: &[u8]) -> bool {
     use windows::Win32::System::Memory::{VirtualProtect, PAGE_EXECUTE_READWRITE, PAGE_PROTECTION_FLAGS};
     if std::slice::from_raw_parts(site, want.len()) != want {
         return false;
@@ -210,6 +226,21 @@ pub unsafe fn install_jip(base: usize) {
     let a = patch_bytes((base + 0x39737d) as *mut u8, &[0x75, 0x07], &[0xEB]);
     let b = patch_bytes((base + 0x397653) as *mut u8, &[0x41, 0x8A, 0xF5], &[0x90, 0x90, 0x90]);
     log!("campaign-jip: join-in-progress checks patched (experimental): 0x18039737d {a}, 0x180397653 {b}");
+}
+
+/// Dedicated servers: the game-state hash check 0x180016e00 always passes. Every campaign cutscene ends with the
+/// script's `game_revert` (`cinematic_skip_stop`, HS fn 0x1801b08a4 sets 0x18263eabb = 0xc01) back to the save made
+/// when the cutscene began. Clients restore it fine, but on our dedicated server the saved slot never matches its
+/// hash, so `0x180016658` gave up and the level reloaded: the "campaign ends ~15 s into play" bug (2026-10-18,
+/// notes/campaign-firefight.md "Cutscene revert"). `mov sil, al` at 0x180016eaf → `mov sil, 1`; `jz` at
+/// 0x180016ec6 → nops. `REACH_REVERT_VERIFY=1` keeps the engine's check.
+pub unsafe fn install_revert_noverify(base: usize) {
+    if std::env::var("REACH_REVERT_VERIFY").is_ok_and(|v| v == "1") {
+        return;
+    }
+    let a = patch_bytes((base + 0x16eaf) as *mut u8, &[0x40, 0x8A, 0xF0], &[0x40, 0xB6, 0x01]);
+    let b = patch_bytes((base + 0x16ec6) as *mut u8, &[0x74, 0x07], &[0x90, 0x90]);
+    log!("revert: game-state hash check skipped (dedicated checkpoint reverts): 0x180016eaf {a}, 0x180016ec6 {b}");
 }
 
 /// Players gathered in the lobby + 1 (the ROSTER_COUNT convention), 0 when there is no lobby.

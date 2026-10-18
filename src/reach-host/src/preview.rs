@@ -260,11 +260,33 @@ unsafe fn teleport(unit: u32, s: [f32; 4]) {
     if !install_teleport_command() {
         return;
     }
-    *PENDING_TELEPORT.lock().unwrap_or_else(|e| e.into_inner()) = Some((unit, s));
+    *PENDING_TELEPORT.lock().unwrap_or_else(|e| e.into_inner()) = Some((unit, s, Some(f32::NAN)));
     hs("(cheat_teleport_to_camera)");
 }
 
-static PENDING_TELEPORT: std::sync::Mutex<Option<(u32, [f32; 4])>> = std::sync::Mutex::new(None);
+/// Test scripts (`set teleport`), game thread: move player `n`'s biped to `s` (x, y, z, facing yaw). On a host any
+/// player (the host simulates every biped); player 0 also turns the local view.
+pub unsafe fn teleport_player(n: usize, s: [f32; 4], pitch: f32) {
+    let unit = if n == 0 {
+        crate::input::player0_view().map_or(u32::MAX, |v| v.unit)
+    } else {
+        player0_datum().map_or(u32::MAX, |d| {
+            let p = d.add(n * 0x490);
+            if (p as *const u16).read() == 0 { u32::MAX } else { (p.add(0x28) as *const u32).read() }
+        })
+    };
+    if unit == u32::MAX {
+        log!("preview: teleport: player {n} has no unit");
+        return;
+    }
+    if install_teleport_command() {
+        *PENDING_TELEPORT.lock().unwrap_or_else(|e| e.into_inner()) = Some((unit, s, (n == 0).then_some(pitch)));
+        hs("(cheat_teleport_to_camera)");
+    }
+}
+
+/// (unit, x y z yaw, turn the local player's view too: Some(pitch), NaN = keep the pitch).
+static PENDING_TELEPORT: std::sync::Mutex<Option<(u32, [f32; 4], Option<f32>)>> = std::sync::Mutex::new(None);
 /// Script function table (0x180a28d40, pointers to definitions: +8 name, +0x20 evaluate, +0x38 parameter count).
 const RVA_HS_FUNCTIONS: usize = 0xa28d40;
 const HS_TELEPORT_INDEX: usize = 388;
@@ -304,7 +326,7 @@ unsafe fn install_teleport_command() -> bool {
 /// Script evaluate (function index, script thread, initialize), on the game thread inside the game's update.
 unsafe extern "system" fn hs_teleport(_index: i16, thread: u32, _init: u8) {
     let base = crate::crash::ENGINE_BASE.load(Ordering::Relaxed);
-    if let Some((unit, s)) = PENDING_TELEPORT.lock().unwrap_or_else(|e| e.into_inner()).take() {
+    if let Some((unit, s, turn)) = PENDING_TELEPORT.lock().unwrap_or_else(|e| e.into_inner()).take() {
         // Per-thread physics context: TLS +0x338 indexes the table at [0x180b93550] + 0x34318; on the thread that
         // runs script commands the slot is empty (null deref at haloreach+0x14173). Borrow the first filled slot.
         let block = crate::input::engine_tls_block().unwrap_or(std::ptr::null());
@@ -324,10 +346,13 @@ unsafe extern "system" fn hs_teleport(_index: i16, thread: u32, _init: u8) {
         f(unit, pos.as_ptr(), fwd.as_ptr(), up.as_ptr(), 1);
         slot.write(saved.unwrap_or(0));
         // The player's look yaw drives the biped's facing: turn it too.
-        if let Some(block) = crate::input::engine_tls_block() {
+        if let Some(block) = crate::input::engine_tls_block().filter(|_| turn.is_some()) {
             let pc = *(block.add(0xd8) as *const *mut u8);
             if !pc.is_null() {
                 (pc.add(0x94) as *mut f32).write_unaligned(s[3]);
+                if let Some(p) = turn.filter(|p| !p.is_nan()) {
+                    (pc.add(0x98) as *mut f32).write_unaligned(p);
+                }
             }
         }
         log!("preview: biped {unit:#x} moved to {pos:?} facing {:.2}", s[3]);

@@ -6,6 +6,8 @@
 # and the master at the end unless KEEP=1. Real NAT is not exercised here (everything is 127.0.0.1).
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 export WINEPREFIX="$ROOT/work/prefix-nat"
+# Test games are silent (no Wine audio driver) so they never play over the desktop; SOUND=1 keeps sound.
+[ -n "${SOUND:-}" ] || export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:+$WINEDLLOVERRIDES;}winepulse.drv=d;winealsa.drv=d"
 export GAMEID="umu-976730"
 export PROTONPATH="$HOME/.local/share/Steam/compatibilitytools.d/GE-Proton11-5-x86_64"
 export REACH_UI_HIDDEN=1

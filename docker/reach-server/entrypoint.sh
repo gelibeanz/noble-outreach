@@ -7,7 +7,8 @@
 #   REACH_MAP          map (default by mode: forge_world, ff10_prototype, m10)
 #   REACH_VARIANT      game variant file name in haloreach/game_variants (slayer/firefight; default by reach-host)
 #   REACH_DIFFICULTY   easy | normal | heroic | legendary (firefight/campaign; default normal)
-#   REACH_MAX_PLAYERS  default 16
+#   REACH_MAX_PLAYERS  default 16 (Firefight and campaign: at most REACH_COOP_MAX)
+#   REACH_COOP_MAX     co-op player cap for Firefight/campaign, 4 (default, the engine's own) up to 8
 #   REACH_NAME         name in the server list (default "Noble Outreach <Mode>")
 #   REACH_MASTER       master URL(s) to list the server on, comma-separated. Empty (default) or "off" = not
 #                      listed: players add it by address (Direct Connect / Favourites) or find it on the LAN.
@@ -21,18 +22,21 @@ set -eu
 : "${REACH_VARIANT:=}"
 : "${REACH_DIFFICULTY:=normal}"
 : "${REACH_MAX_PLAYERS:=16}"
-# Mode -> reach-host flags. Firefight and campaign are 4-player co-op modes.
+: "${REACH_COOP_MAX:=4}"
+COOP_ARGS=""
+[ "$REACH_COOP_MAX" -gt 4 ] && COOP_ARGS="--coop-max $REACH_COOP_MAX"
+# Mode -> reach-host flags. Firefight and campaign are co-op modes: 4 players, or up to 8 with REACH_COOP_MAX.
 case "$REACH_MODE" in
   slayer|multiplayer|mp)
     : "${REACH_MAP:=forge_world}"; REACH_MODE_TITLE=Slayer
     set -- --map "$REACH_MAP" ;;
   firefight|ff)
     : "${REACH_MAP:=ff10_prototype}"; REACH_MODE_TITLE=Firefight
-    [ "$REACH_MAX_PLAYERS" -gt 4 ] && REACH_MAX_PLAYERS=4
+    [ "$REACH_MAX_PLAYERS" -gt "$REACH_COOP_MAX" ] && REACH_MAX_PLAYERS=$REACH_COOP_MAX
     set -- --firefight "$REACH_MAP" --difficulty "$REACH_DIFFICULTY" ;;
   campaign|coop)
     : "${REACH_MAP:=m10}"; REACH_MODE_TITLE=Campaign
-    [ "$REACH_MAX_PLAYERS" -gt 4 ] && REACH_MAX_PLAYERS=4
+    [ "$REACH_MAX_PLAYERS" -gt "$REACH_COOP_MAX" ] && REACH_MAX_PLAYERS=$REACH_COOP_MAX
     set -- --campaign "$REACH_MAP" --difficulty "$REACH_DIFFICULTY" ;;
   *) echo "[reach-server] REACH_MODE=$REACH_MODE: expected slayer, firefight or campaign" >&2; exit 2 ;;
 esac
@@ -83,7 +87,7 @@ tail -n 0 -F /data/run/reach-host.log 2>/dev/null &
 set -f
 while true; do
   # shellcheck disable=SC2086
-  set -- --dedicated --mcc 'Z:\mcc' $MODE_ARGS --max-players "$REACH_MAX_PLAYERS" \
+  set -- --dedicated --mcc 'Z:\mcc' $MODE_ARGS --max-players "$REACH_MAX_PLAYERS" $COOP_ARGS \
     --bind 0.0.0.0:47800 --server-name "$REACH_NAME" $REACH_ARGS
   if [ -n "$REACH_MASTER" ] && [ "$REACH_MASTER" != off ]; then
     set -- "$@" --master "$REACH_MASTER"

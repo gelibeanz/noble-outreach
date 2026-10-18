@@ -158,6 +158,8 @@ fn recv_loop(sock: UdpSocket, net: Arc<Net>, gen: u32) {
             Ok((n, from)) if crate::vote::handle(&sock, &buf[..n], from) => {}
             // Scoreboard ping (ping.rs).
             Ok((n, from)) if crate::ping::handle(&buf[..n], from) => {}
+            // End-of-game carnage report from the host (stats.rs).
+            Ok((n, from)) if crate::stats::handle(&buf[..n], from) => {}
             // Campaign lobby status from a dedicated server (lobby.rs).
             Ok((n, from)) if crate::lobby::handle(&buf[..n], from) => {}
             // Wake packets for a dormant dedicated server (dormant.rs).

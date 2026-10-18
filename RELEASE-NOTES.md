@@ -1,8 +1,9 @@
-# Noble Outreach 0.3.2
+# Noble Outreach 0.4.1
 
 A standalone community client for Halo: Reach on PC. It runs the engine from your own Steam copy of Halo: The
-Master Chief Collection. This release is about the menus, voting, and moving from one game to the next. 0.3.1 added the vote screens
-and in-game votes; 0.3.2 fixes the mouse after leaving a game and gives the launcher its own icon.
+Master Chief Collection. This release brings new PLAY and HOST screens with every game type and map variant in
+your files, campaign progress and checkpoints, a carnage report after each game, co-op for up to 8 players, and
+community game types and maps.
 
 **You need:** MCC on Steam, build **2025.08.16** (`2025.08.16.178512.1`), with Halo: Reach installed. Linux
 also needs [umu-launcher](https://github.com/Open-Wine-Components/umu-launcher). The launcher updates itself from
@@ -11,59 +12,50 @@ also needs [umu-launcher](https://github.com/Open-Wine-Components/umu-launcher).
 ## Downloads
 - `NobleOutreach-Launcher.exe` (Windows, unsigned: SmartScreen > More info > Run anyway) or
   `NobleOutreach-Launcher-linux` (`chmod +x`). The launcher installs and updates the game client.
-- `NobleOutreach-Server-v0.3.2.tar.gz`: dedicated server (`reach-host.exe --dedicated`) and a static `reach-master`.
+- `NobleOutreach-Server-v0.4.1.tar.gz`: dedicated server (`reach-host.exe --dedicated`) and a static `reach-master`.
 - `reach-host.exe` and `SHA256SUMS` are what the launcher downloads and checks.
 
-## Main menu
-- **Menu music.** The main menu plays Halo: Reach's own menu theme, read from your MCC files. *Settings > Audio >
-  Menu music* sets its volume (0 turns it off).
-- **Live background.** Your own Spartan stands on Spire behind the menu, in your armour. Still art from your
-  install shows for the first 20 seconds or so while it loads. *Settings > Graphics > Live menu background*
-  turns it off if your PC is busy (it uses about one CPU core while the menu is open).
-- **CUSTOMIZE is ready sooner:** the 3D preview starts with the menu instead of when you open the screen, and
-  the camera now turns all the way round your character.
+## PLAY and HOST
+- **Every game type in your files.** PLAY and HOST list all of Reach's game types (custom games, 2010
+  matchmaking, Title Update, Firefight Arcade and MCC's own), sorted into Slayer, Objective, Infection, Party,
+  Invasion, Firefight and Forge, with search and an FFA / Teams filter.
+- **One row per mode.** Reach ships many modes in several editions. Each mode is one row ("3 VERSIONS"); the
+  chips in the detail panel pick the edition (MCC, Arcade, Original matchmaking, Title Update).
+- **Map variants.** Pick a map, then any of its variants, including the Forge World remixes.
+- **Community content.** Game types and maps you put in `reach-data\custom\` next to the game, and MCC
+  Steam Workshop items you are subscribed to, show up with a COMMUNITY tag.
+- **Join without the server's files.** Joining a server that runs a game type or map variant you do not have
+  now works: the server sends it to you when you join. Before, the join was refused.
 
-## Game after game in one window
-- When a vote picks the next game, when you leave a game, and when a campaign mission rolls on into the next,
-  the game stays in its window. A loading card with the map's art shows while the next map loads. Before, the
-  game window closed and a new one opened.
-- After many games in one session the client starts the next game in a fresh process to free memory, so you
-  may see the window reopen then.
+## Campaign
+- **CONTINUE** picks up your next mission, and the campaign screen shows which missions you finished on each
+  difficulty.
+- **Checkpoints (solo).** The last checkpoint of each mission is kept; playing that mission solo again can
+  resume from it.
+- **Up to 8 players** in campaign and Firefight co-op (Reach's own limit is 4). Hosts choose the player count on
+  the co-op screens; dedicated servers use `--coop-max N`.
+
+## After a game
+- **Carnage report:** kills, deaths, assists, medals and score for every player when a game ends. On a server
+  with a playlist vote it is the first tab of the vote page.
 
 ## Voting
-- **Vote for the next game** on a full lobby page between games: the map, game type and playlist on the left,
-  three choices with the map's art, the game type's description and live vote counts, plus None of the above,
-  and the players with their teams on the right. In a match the vote shows as a compact card. Keys 1-4, the
-  mouse, or the d-pad and A.
-- **In-game votes** from the pause menu (*CALL A VOTE*): **Shuffle teams**, **Kick player**, **Skip to next game**
-  (playlist servers) and **Restart game** (dedicated servers). Everyone gets a card at the right edge: **F5** yes,
-  **F6** no. A vote passes with a majority of the players in the game; the caller counts as yes. 30 seconds per
-  vote, one at a time, and a minute between two calls from the same player.
-- A kicked player goes back to the menu with a notice and cannot rejoin that server until it restarts.
-
-## Scoreboard
-- Hold **Tab** (pad: Back): teams with their scores, then each player's score, kills, deaths, assists and ping.
-- Right-click while holding Tab to use the mouse: the menu next to a player starts a vote to kick them or
-  copies their name.
-
-## Controls
-- *Settings > Keyboard & mouse* shows the real key for every action, including Forge and Theater, instead of
-  "Default". Forge actions have clearer names (Monitor mode, Create objects, Object properties, ...).
+- A running call vote (shuffle, kick, skip, restart) can now be answered from the Esc menu with the mouse, as
+  well as with F5 / F6. In game the card's YES / NO show the keys only, since the mouse belongs to the game.
 
 ## Fixes
-- 0.3.2: after leaving a game the mouse stayed hidden and locked, so the menu could not be clicked.
-- 0.3.2: the launcher has its own icon (Windows exe and window) instead of none.
-- The game could fail to start its graphics under Wine/Proton on the first try; it now retries.
+- **Campaign on a dedicated server** no longer ends on its own after the first cutscene.
+- **Mouse in the menus:** after leaving a game, and on the call-vote options, clicks could stop working. Each
+  screen that needs the mouse now holds it on its own, so one closing no longer takes it from another.
 
 ## Known limits
-- **Campaign on a dedicated server can end on its own** soon after the mission starts when two or more players
-  are in, and the server then restarts. Host campaign co-op from the menu (listen server) until this is fixed.
 - CUSTOMIZE: switching between Spartan and Elite can keep showing the previous character in the 3D preview.
   The change is saved and shows in game.
 - The Firefight scoreboard shows 0 for each player. The HUD score is right.
 - A listen host behind carrier-grade NAT (CGNAT, common on mobile and some home broadband) cannot be reached
   directly. Let another player host, or use a dedicated server. NAT punching needs a master server with
   rendezvous enabled.
+- More than 4 players in campaign or Firefight is new: it is checked on our own test runs, not yet in long games.
 - Works with one exact MCC build only. When Steam updates MCC, wait for a matching release.
 - A dedicated server in Docker needs an NVIDIA GPU. AMD and Intel GPUs are untested.
 

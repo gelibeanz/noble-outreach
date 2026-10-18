@@ -8,12 +8,15 @@
 
 use std::path::{Path, PathBuf};
 
-use egui::{Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, StrokeKind, TextureHandle, Ui, Vec2};
+use egui::{Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, Vec2};
 
 use super::mccart;
 use super::settings;
 use super::theme::{self, ACCENT, DIM, HOVER, LINE, PANEL, TEXT};
+use super::widgets::{big_ghost, cover, full_uv, placeholder, tab_button};
 use crate::options::SKULLS;
+use crate::checkpoint;
+use crate::progress::{self, Pick, Progress};
 
 /// Campaign missions in story order: (map stem, name, texture-pack key, tagline in our own words).
 /// m70_a (credits) is left out; m40 has no map. Thumbnail `HREACH_<key>`, banner `HREACH_<key>_LARGE`.
@@ -117,7 +120,8 @@ pub struct CampaignScreen {
     pub skulls: u64,
     pub picker: bool,
     players: u32,
-    finished: Vec<String>,
+    /// Finished missions and the last one started (progress.rs), read when the screen opens.
+    progress: Progress,
 }
 
 impl CampaignScreen {
@@ -147,7 +151,7 @@ impl CampaignScreen {
             skulls,
             picker: false,
             players: 2,
-            finished: s.finished,
+            progress: progress::get(),
         }
     }
 
@@ -187,6 +191,39 @@ impl CampaignScreen {
             let keys: Vec<&str> = SKULLS.iter().filter(|s| self.skulls >> s.2 & 1 != 0).map(|s| s.0).collect();
             a.extend(["--skulls".into(), keys.join(",")]);
         }
+        Some(a)
+    }
+
+    /// What CONTINUE would launch (last unfinished mission, else the next one), among the installed missions.
+    fn continue_pick(&self) -> Option<Pick> {
+        let installed: Vec<&str> = self.missions.iter().map(|&i| MISSIONS[i].0).collect();
+        self.progress.continue_pick(&installed)
+    }
+
+    /// CONTINUE: select its mission, difficulty and skulls (saved as the last picks) and return the launch flags.
+    pub fn continue_args(&mut self) -> Option<Vec<String>> {
+        let c = self.continue_pick()?;
+        self.tab = Tab::Campaign;
+        self.select(&c.mission);
+        self.difficulty = c.difficulty as usize;
+        self.skulls = SKULLS.iter().filter(|k| c.skulls.iter().any(|x| x == k.0)).fold(0u64, |b, k| b | 1 << k.2);
+        if c.resume && checkpoint::exists(&c.mission) {
+            return self.resume_args();
+        }
+        self.args()
+    }
+
+    /// The selected mission's saved checkpoint, if any (solo only: joiners would not get the saved state).
+    fn checkpoint(&self) -> Option<&'static str> {
+        let m = MISSIONS[*self.missions.get(self.mission)?].0;
+        (self.tab == Tab::Campaign && checkpoint::exists(m)).then_some(m)
+    }
+
+    /// Launch flags that resume the selected mission from its checkpoint (the save carries difficulty and skulls).
+    pub fn resume_args(&self) -> Option<Vec<String>> {
+        let m = self.checkpoint()?;
+        let mut a = self.args()?;
+        a.extend(["--checkpoint".into(), checkpoint::path(m).to_string_lossy().into_owned()]);
         Some(a)
     }
 
@@ -253,9 +290,15 @@ impl CampaignScreen {
         let list_w = (body.width() * 0.32).clamp(300.0, 470.0);
         let left = Rect::from_min_size(body.min, Vec2::new(list_w, body.height()));
         let right = Rect::from_min_max(Pos2::new(left.right() + 22.0, body.top()), body.max);
-        self.list(ui, left);
+        let mut cont = false;
+        self.list(ui, left, &mut cont);
         if let Some(a) = self.detail(ui, right) {
             act = a;
+        }
+        if cont {
+            if let Some(a) = self.continue_args() {
+                act = Action::Play(a);
+            }
         }
         if self.picker {
             self.skull_picker(ui, full);
@@ -298,7 +341,7 @@ impl CampaignScreen {
         Action::None
     }
 
-    fn list(&mut self, ui: &mut Ui, rect: Rect) {
+    fn list(&mut self, ui: &mut Ui, rect: Rect, continue_clicked: &mut bool) {
         let p = ui.painter().clone();
         p.rect_filled(rect, 2.0, PANEL);
         p.rect_stroke(rect, 2.0, Stroke::new(1.0, LINE), StrokeKind::Inside);
@@ -306,10 +349,19 @@ impl CampaignScreen {
         let cap = if self.tab == Tab::Campaign { "MISSIONS" } else { "MAPS" };
         p.text(inner.left_top(), Align2::LEFT_TOP, cap, FontId::proportional(12.0), DIM);
         if self.tab == Tab::Campaign {
-            let done = self.missions.iter().filter(|&&i| self.finished.iter().any(|f| f == MISSIONS[i].0)).count();
+            let done = self.missions.iter().filter(|&&i| self.progress.best(MISSIONS[i].0).is_some()).count();
             p.text(inner.right_top(), Align2::RIGHT_TOP, format!("{done} / {} FINISHED", self.missions.len()), FontId::proportional(12.0), DIM);
         }
-        let area = Rect::from_min_max(inner.min + Vec2::new(0.0, 24.0), inner.max);
+        let mut area = Rect::from_min_max(inner.min + Vec2::new(0.0, 24.0), inner.max);
+        if self.tab == Tab::Campaign {
+            if let Some(c) = self.continue_pick() {
+                let r = Rect::from_min_size(area.min, Vec2::new(area.width(), 58.0));
+                if self.continue_card(ui, r, &c) {
+                    *continue_clicked = true;
+                }
+                area.min.y = r.bottom() + 10.0;
+            }
+        }
         let n = self.count();
         if n == 0 {
             p.text(area.left_top(), Align2::LEFT_TOP, "No maps found in your MCC files.", FontId::proportional(15.0), DIM);
@@ -342,8 +394,10 @@ impl CampaignScreen {
                     let x = tr.right() + 12.0;
                     p.text(Pos2::new(x, r.center().y - 2.0), Align2::LEFT_BOTTOM, num.to_uppercase(), FontId::proportional(11.5), if selected { ACCENT } else { DIM });
                     p.text(Pos2::new(x, r.center().y), Align2::LEFT_TOP, name, FontId::proportional(17.0), if selected { Color32::WHITE } else { TEXT });
-                    if self.tab == Tab::Campaign && self.finished.iter().any(|f| f == self.item(i).0) {
-                        p.text(Pos2::new(r.right() - 10.0, r.center().y), Align2::RIGHT_CENTER, "✔", FontId::proportional(15.0), ACCENT);
+                    if self.tab == Tab::Campaign {
+                        if let Some(d) = self.progress.best(self.item(i).0) {
+                            difficulty_badge(p, &ctx, Pos2::new(r.right() - 10.0, r.center().y), d as usize);
+                        }
                     }
                     if resp.clicked() {
                         *self.sel() = i;
@@ -412,6 +466,9 @@ impl CampaignScreen {
             p.text(Pos2::new(icon.right() + 10.0, icon.center().y), Align2::LEFT_CENTER, d.1.to_uppercase(), FontId::proportional(18.0), if on { Color32::WHITE } else { TEXT });
             let g = p.layout(d.2.to_string(), FontId::proportional(12.5), DIM, r.width() - 24.0);
             p.galley(Pos2::new(r.left() + 12.0, icon.bottom() + 8.0), g, DIM);
+            if self.tab == Tab::Campaign && self.progress.finished_on(self.item(i).0, k as u8) {
+                p.text(Pos2::new(r.right() - 10.0, r.top() + 8.0), Align2::RIGHT_TOP, "✔ DONE", FontId::proportional(11.5), ACCENT);
+            }
             if resp.clicked() {
                 self.difficulty = k;
             }
@@ -486,19 +543,48 @@ impl CampaignScreen {
         let mut out = None;
         let args = self.args();
         let mut row = ui.new_child(egui::UiBuilder::new().max_rect(Rect::from_min_max(Pos2::new(rect.left(), by), rect.max)).layout(egui::Layout::left_to_right(egui::Align::Center)));
-        if theme::primary_button(&mut row, "Play solo", 220.0, args.is_some()).clicked() {
+        let has_checkpoint = self.checkpoint().is_some();
+        let w = if has_checkpoint { 160.0 } else { 220.0 };
+        if theme::primary_button(&mut row, "Play solo", w, args.is_some()).clicked() {
             out = args.clone().map(Action::Play);
         }
         row.add_space(8.0);
-        if big_ghost(&mut row, "Host co-op", 200.0, args.is_some()).clicked() {
+        // Solo only: the saved state is the host's; joiners would not get it.
+        if has_checkpoint && big_ghost(&mut row, "Resume checkpoint", 205.0, true).clicked() {
+            out = self.resume_args().map(Action::Play);
+        }
+        if has_checkpoint {
+            row.add_space(8.0);
+        }
+        if big_ghost(&mut row, "Host co-op", if has_checkpoint { 150.0 } else { 200.0 }, args.is_some()).clicked() {
             out = args.clone().map(|a| Action::Host { players: self.players, args: a });
         }
         row.add_space(14.0);
         theme::caption(&mut row, "Players");
-        row.add(egui::Slider::new(&mut self.players, 2..=4));
+        row.add(egui::Slider::new(&mut self.players, 2..=crate::coop::MAX));
+        if has_checkpoint {
+            return out; // no room for the hint
+        }
         let hint = if self.tab == Tab::Campaign { "Friends join before the mission starts." } else { "Friends join at any time." };
         row.add(egui::Label::new(egui::RichText::new(hint).size(12.5).color(DIM)).wrap());
         out
+    }
+
+    /// The CONTINUE card on top of the mission list: mission, difficulty and whether it resumes or starts the next
+    /// mission. Returns true when clicked.
+    fn continue_card(&self, ui: &mut Ui, r: Rect, c: &Pick) -> bool {
+        let resp = ui.interact(r, ui.id().with("continue"), Sense::click());
+        let p = ui.painter();
+        p.rect_filled(r, 2.0, if resp.hovered() { ACCENT.gamma_multiply(0.30) } else { ACCENT.gamma_multiply(0.16) });
+        p.rect_stroke(r, 2.0, Stroke::new(if resp.hovered() { 2.0 } else { 1.0 }, ACCENT), StrokeKind::Inside);
+        let x = r.left() + 14.0;
+        p.text(Pos2::new(x, r.center().y - 1.0), Align2::LEFT_BOTTOM, "CONTINUE", FontId::proportional(19.0), Color32::WHITE);
+        let num = MISSIONS.iter().position(|m| m.0 == c.mission).map_or(0, |i| i + 1);
+        let what = if c.resume && checkpoint::exists(&c.mission) { "Checkpoint" } else if c.resume { "Last played" } else { "Next" };
+        let line = format!("{what}: Mission {num:02} {} · {}", mission_name(&c.mission), DIFFICULTIES[c.difficulty as usize].1);
+        p.text(Pos2::new(x, r.center().y + 2.0), Align2::LEFT_TOP, line, FontId::proportional(13.0), TEXT);
+        p.text(Pos2::new(r.right() - 16.0, r.center().y), Align2::RIGHT_CENTER, "▶", FontId::proportional(18.0), if resp.hovered() { Color32::WHITE } else { ACCENT });
+        resp.clicked()
     }
 
     fn skull_picker(&mut self, ui: &mut Ui, full: Rect) {
@@ -559,70 +645,19 @@ impl CampaignScreen {
     }
 }
 
-/// Paint `t` filling `r` (cropped to keep its aspect).
-fn cover(p: &egui::Painter, t: &TextureHandle, r: Rect, tint: Color32) {
-    let [tw, th] = t.size();
-    let (ta, ra) = (tw as f32 / th as f32, r.width() / r.height());
-    let uv = if ta > ra {
-        let w = ra / ta;
-        Rect::from_min_max(Pos2::new((1.0 - w) / 2.0, 0.0), Pos2::new((1.0 + w) / 2.0, 1.0))
-    } else {
-        let h = ta / ra;
-        Rect::from_min_max(Pos2::new(0.0, (1.0 - h) / 2.0), Pos2::new(1.0, (1.0 + h) / 2.0))
-    };
-    p.image(t.id(), r, inset(t, uv), tint);
-}
-
-/// The whole texture, half a texel in from each edge: egui-directx11 samples with BORDER addressing and a white
-/// border colour, so linear filtering at uv 0 / 1 bleeds a grey line along the image edge.
-fn full_uv(t: &TextureHandle) -> Rect {
-    inset(t, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)))
-}
-
-fn inset(t: &TextureHandle, uv: Rect) -> Rect {
-    let [w, h] = t.size();
-    let (dx, dy) = (0.5 / w as f32, 0.5 / h as f32);
-    Rect::from_min_max(Pos2::new(uv.min.x.max(dx), uv.min.y.max(dy)), Pos2::new(uv.max.x.min(1.0 - dx), uv.max.y.min(1.0 - dy)))
-}
-
-/// Text-only stand-in when the player's install has no picture.
-fn placeholder(p: &egui::Painter, r: Rect, label: &str) {
-    let mut mesh = egui::Mesh::default();
-    mesh.colored_vertex(r.left_top(), Color32::from_rgb(34, 40, 50));
-    mesh.colored_vertex(r.right_top(), Color32::from_rgb(20, 24, 30));
-    mesh.colored_vertex(r.right_bottom(), Color32::from_rgb(12, 14, 18));
-    mesh.colored_vertex(r.left_bottom(), Color32::from_rgb(40, 28, 18));
-    mesh.add_triangle(0, 1, 2);
-    mesh.add_triangle(0, 2, 3);
-    p.add(mesh);
-    if !label.is_empty() {
-        let digits: String = label.chars().filter(|c| c.is_ascii_digit()).collect();
-        p.text(r.center(), Align2::CENTER_CENTER, if digits.is_empty() { "—".into() } else { digits }, FontId::proportional(r.height() * 0.5), ACCENT.gamma_multiply(0.6));
+/// Small icon of the highest difficulty a mission was finished on, right-aligned at `at`.
+fn difficulty_badge(p: &egui::Painter, ctx: &egui::Context, at: Pos2, d: usize) {
+    let r = Rect::from_min_size(Pos2::new(at.x - 24.0, at.y - 12.0), Vec2::splat(24.0));
+    p.text(Pos2::new(r.left() - 4.0, at.y), Align2::RIGHT_CENTER, DIFFICULTIES[d].1.to_uppercase(), FontId::proportional(10.5), DIM);
+    match mccart::texture(ctx, DIFFICULTIES[d].3) {
+        Some(t) => {
+            p.image(t.id(), r, full_uv(&t), Color32::WHITE);
+        }
+        None => {
+            p.text(r.center(), Align2::CENTER_CENTER, "✔", FontId::proportional(15.0), ACCENT);
+        }
     }
 }
-
-fn tab_button(ui: &mut Ui, label: &str, on: bool) -> egui::Response {
-    let font = FontId::proportional(16.0);
-    let g = ui.painter().layout_no_wrap(label.to_uppercase(), font, TEXT);
-    let (r, resp) = ui.allocate_exact_size(g.size() + Vec2::new(26.0, 18.0), Sense::click());
-    let col = if on { Color32::WHITE } else if resp.hovered() { TEXT } else { DIM };
-    ui.painter().galley(r.center() - g.size() / 2.0, g, col);
-    if on || resp.hovered() {
-        ui.painter().rect_filled(Rect::from_min_max(Pos2::new(r.left() + 8.0, r.bottom() - 3.0), Pos2::new(r.right() - 8.0, r.bottom())), 0.0, if on { ACCENT } else { DIM });
-    }
-    resp
-}
-
-/// Outlined button as tall as `primary_button`.
-fn big_ghost(ui: &mut Ui, label: &str, width: f32, enabled: bool) -> egui::Response {
-    let (r, resp) = ui.allocate_exact_size(Vec2::new(width, 44.0), if enabled { Sense::click() } else { Sense::hover() });
-    let hot = enabled && resp.hovered();
-    ui.painter().rect_filled(r, 2.0, if hot { HOVER } else { Color32::TRANSPARENT });
-    ui.painter().rect_stroke(r, 2.0, Stroke::new(1.5, if hot { ACCENT } else { ACCENT.gamma_multiply(0.55) }), StrokeKind::Inside);
-    ui.painter().text(r.center(), Align2::CENTER_CENTER, label.to_uppercase(), FontId::proportional(19.0), if enabled { TEXT } else { DIM });
-    resp
-}
-
 /// Listen host's campaign lobby (overlay passive layer while lobby.rs holds launch state 8): who is in, Enter to
 /// start now, the countdown, and where friends can reach us.
 pub fn lobby_panel(ui: &mut Ui, players: u32, max: u32, secs: u32, host: bool) {

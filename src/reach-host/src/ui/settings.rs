@@ -20,6 +20,8 @@ pub struct Settings {
     /// Last choices, so the menu opens where the player left it.
     pub last_map: String,
     pub last_variant: String,
+    /// Map variant file for `last_map` (empty = the map's default), from the PLAY / HOST map step.
+    pub last_map_variant: String,
     pub host_name: String,
     pub host_max_players: u32,
     pub host_register: bool,
@@ -32,7 +34,7 @@ pub struct Settings {
     pub pad: Pad,
     /// Spartan / Elite customisation (ui/customize.rs), written into the slot 34 profile.
     pub armour: Armour,
-    /// CAMPAIGN screen (ui/campaign.rs): last picks and finished missions.
+    /// CAMPAIGN screen (ui/campaign.rs): last picks (finished missions live in progress.rs).
     pub campaign: Campaign,
 }
 
@@ -45,13 +47,11 @@ pub struct Campaign {
     pub difficulty: u8,
     /// `options::SKULLS` keys.
     pub skulls: Vec<String>,
-    /// Missions finished on any difficulty (map stems). TODO: nothing records a mission end yet (untested engine path).
-    pub finished: Vec<String>,
 }
 
 impl Default for Campaign {
     fn default() -> Self {
-        Campaign { mission: "m05".into(), difficulty: 1, skulls: Vec::new(), finished: Vec::new() }
+        Campaign { mission: "m05".into(), difficulty: 1, skulls: Vec::new() }
     }
 }
 
@@ -271,6 +271,7 @@ impl Default for Settings {
             favourites: Vec::new(),
             last_map: "forge_halo".into(),
             last_variant: "slayer_054.bin".into(),
+            last_map_variant: String::new(),
             host_name: "Reach host".into(),
             host_max_players: 8,
             host_register: true,

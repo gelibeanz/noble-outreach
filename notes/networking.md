@@ -239,6 +239,18 @@ version = 1, u8 kind, u8 entry count (table; 0 otherwise), u8 0.
   changes); client `ping: table from the host: …` when counts change.
 - Older builds treat an `RPNG` datagram as an engine datagram from an unknown id (logged junk peer, harmless).
 
+## Carnage report (2026-10-18, `src/reach-host/src/stats.rs`)
+
+The host's end-of-game report (notes/frontend.md "Carnage report"). Raw datagrams on the game socket, magic `RCRN`,
+handed to `stats::handle` in net.rs's receive thread. Host → every peer heard from in the last 8 s, 5 times 1 s
+apart when its game results become final; clients accept it only from their host and drop repeats (same id and
+rows). Little-endian. Header 8 bytes: `RCRN`, u8 version 1, u8 kind 1, u8 player count (≤16), u8 flags (bit 0 team
+game, bit 1 Firefight). Then u16 report id (game number in the host process), 8 × i16 team scores, and per player:
+u64 xuid, u8 name length + UTF-8 name (≤24 bytes), i8 team, i32 score, i16 kills, deaths, assists, betrayals,
+suicides, best spree, u8 best weapon (damage reporting type, 0xFF none), u16 its kills, u16 medal total, u8 medal
+count (≤6), that many {u8 medal index, u16 count}. 16 full players stay under 1400 bytes. Medal indices are named on
+each machine from its own tags.
+
 ### Call votes (2026-10-17, `src/reach-host/src/callvote.rs`, panel in `ui/vote.rs`)
 Same header and version (1): older clients and servers ignore unknown kinds, so no bump. Run by any host (listen or
 dedicated); the host decides on its game thread (`vote::game_tick` → `callvote::game_tick`). Header id = call id.

@@ -1,0 +1,83 @@
+-- Gun Game (Noble Outreach experiment, our own script; ReachVariantTool Megalo dialect)
+-- Everyone starts on weapon 1. Each kill moves the killer to the next weapon:
+--   1 Magnum, 2 Assault Rifle, 3 Plasma Repeater, 4 Shotgun, 5 DMR, 6 Energy Sword.
+-- A kill with the last weapon wins the round. Score = weapons completed.
+-- base: slayer_054.bin
+-- Build: scripts/build-modes.sh (ReachVariantTool --headless compiles this onto the base, replacing only its script).
+
+alias last_level     = 5                     -- index of the last weapon in the list
+alias level          = allocate player.number -- 0-based index into the weapon list
+alias armed_level    = allocate player.number -- level the current biped was armed for
+alias armed_biped    = allocate player.object -- biped we last armed
+alias announced      = allocate player.number
+alias announce_timer = allocate player.timer
+
+declare player.level with network priority high = 0
+declare player.armed_level with network priority local = 0
+declare player.announced with network priority low = 0
+declare player.announce_timer = 5
+
+for each player do -- round card and start announcement
+   current_player.set_objective_text("Gun Game: every kill gives you the next weapon.\r\nFirst through all 6 weapons wins.")
+   current_player.announce_timer.set_rate(-100%)
+   if current_player.announced == 0 and current_player.announce_timer.is_zero() then
+      send_incident(game_start_slayer, current_player, no_player)
+      current_player.announced = 1
+   end
+end
+
+for each player do -- a kill moves the killer up one weapon
+   if current_player.killer_type_is(kill) then
+      alias killer = allocate temporary player
+      killer = current_player.get_killer()
+      killer.level += 1
+      killer.score = killer.level
+   end
+end
+
+for each player do -- arm a new biped, or a biped whose player just levelled up
+   alias rearm = allocate temporary number
+   rearm = 0
+   if current_player.armed_level != current_player.level then
+      rearm = 1
+   end
+   if current_player.armed_biped != current_player.biped then
+      rearm = 1
+   end
+   if rearm == 1 and current_player.biped != no_object and current_player.level <= last_level then
+      current_player.biped.remove_weapon(secondary, true)
+      current_player.biped.remove_weapon(primary, true)
+      if current_player.level == 0 then
+         current_player.biped.add_weapon(magnum, force)
+      end
+      if current_player.level == 1 then
+         current_player.biped.add_weapon(assault_rifle, force)
+      end
+      if current_player.level == 2 then
+         current_player.biped.add_weapon(plasma_repeater, force)
+      end
+      if current_player.level == 3 then
+         current_player.biped.add_weapon(shotgun, force)
+      end
+      if current_player.level == 4 then
+         current_player.biped.add_weapon(dmr, force)
+      end
+      if current_player.level == 5 then
+         current_player.biped.add_weapon(energy_sword, force)
+      end
+      current_player.frag_grenades = 0
+      current_player.plasma_grenades = 0
+      current_player.armed_level = current_player.level
+      current_player.armed_biped = current_player.biped
+   end
+end
+
+for each player do -- finished the list: round over
+   if current_player.level > last_level then
+      game.end_round()
+   end
+end
+
+if game.round_time_limit > 0 and game.round_timer.is_zero() then
+   game.end_round()
+end

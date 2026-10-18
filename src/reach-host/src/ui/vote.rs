@@ -51,7 +51,11 @@ pub fn hide_key() -> bool {
 
 /// input.rs: digit key `n` (0 = key 1) pressed while the game has the keyboard. True = consumed (a vote is open).
 pub fn key(n: u8) -> bool {
-    vote::cast(n)
+    let ok = vote::cast(n);
+    if ok {
+        CARNAGE_TAB.lock().unwrap().1 = 2; // voting by key shows the vote tab
+    }
+    ok
 }
 
 /// Is a player unit alive under us? (No unit = pre-game / loading / dead: the full page shows and takes the mouse.)
@@ -91,13 +95,18 @@ fn page_mode() -> bool {
     !in_game() || (fake("page") && FRAMES.load(Ordering::Relaxed) >= 150)
 }
 
+/// The full next-game page is up this frame (it shows the carnage report as its first tab).
+pub(super) fn page_up(f: &Frame) -> bool {
+    f.next.as_ref().is_some_and(|v| v.open.is_some()) && page_mode()
+}
+
 /// Passive layer (overlay.rs): what to draw, if anything; also switches the cursor on/off for the page.
 pub fn current() -> Option<Frame> {
     let next = fake_next().or_else(vote::view);
     let call = callvote::view();
     let want = next.as_ref().is_some_and(|v| v.open.is_some()) && page_mode() && !fake("next");
     if INTERACTIVE.swap(want, Ordering::Relaxed) != want {
-        super::post_to_window(if want { super::WM_UI_OPEN } else { super::WM_UI_CLOSE });
+        super::post_ui(super::OWN_VOTE, want);
     }
     if next.is_none() && call.is_none() {
         FRAMES.store(0, Ordering::Relaxed);
@@ -201,7 +210,7 @@ fn variant_text(file: &str) -> (Option<String>, Option<String>) {
     }
     let read = || -> Option<Vec<u8>> {
         let f = std::path::Path::new(file);
-        let p = if f.is_absolute() { f.to_path_buf() } else { mcc_dir()?.join("haloreach").join("game_variants").join(file) };
+        let p = if f.is_absolute() { f.to_path_buf() } else { crate::catalog::game_variant_path(&mcc_dir()?, file) };
         std::fs::read(p).ok()
     };
     let text = |b: &[u8], at: usize| -> Option<String> {
@@ -252,7 +261,7 @@ fn base_mode(o: &vote::Opt) -> (&'static str, &'static str) {
 }
 
 /// Game type name: the variant's own name, else one made from its file name.
-fn variant_name(o: &vote::Opt) -> String {
+pub(super) fn variant_name(o: &vote::Opt) -> String {
     match o.mode {
         crate::query::MODE_CAMPAIGN => "Campaign".into(),
         _ => variant_text(&o.game_variant).0.unwrap_or_else(|| super::menu::variant_title(&o.game_variant)),
@@ -275,7 +284,7 @@ fn thumb(o: &vote::Opt) -> Option<String> {
 }
 
 /// The game being played now, from this process's own arguments (map / variant) or the host's query info.
-fn current_game() -> Option<vote::Opt> {
+pub(super) fn current_game() -> Option<vote::Opt> {
     if let Some(i) = crate::query::info() {
         return Some(vote::Opt { mode: i.mode, name: String::new(), map: i.map, game_variant: i.game_variant });
     }
@@ -407,6 +416,7 @@ fn draw_next(ui: &mut egui::Ui, v: &vote::View) {
         for k in 0..4u8 {
             let key = [egui::Key::Num1, egui::Key::Num2, egui::Key::Num3, egui::Key::Num4][k as usize];
             if ui.input(|i| i.key_pressed(key)) {
+                CARNAGE_TAB.lock().unwrap().1 = 2; // voting by key shows the vote tab
                 vote::cast(k);
             }
         }
@@ -506,9 +516,48 @@ fn page(ui: &mut egui::Ui, v: &vote::View, o: &vote::OpenMsg) {
     let right = Rect::from_min_max(egui::pos2(full.right() - m - 300.0, top), egui::pos2(full.right() - m, bottom));
     let centre = Rect::from_min_max(egui::pos2(left.right() + 24.0, top), egui::pos2(right.left() - 24.0, bottom));
     game_column(ui, left, o);
+    // After a game: CARNAGE REPORT / VOTE tabs next to the title; the report is the first tab for its first
+    // seconds, then the vote (keys 1-4 vote either way and switch to it).
+    let carnage = if o.keep { None } else { super::carnage::recent() };
+    if let Some(r) = carnage {
+        let since = v.round_at.map_or(0.0, |t| t.elapsed().as_secs_f32());
+        let mut tab = CARNAGE_TAB.lock().unwrap();
+        if tab.0 != o.id {
+            *tab = (o.id, 0);
+        }
+        let showing = tab.1 == 1 || (tab.1 == 0 && since < CARNAGE_FIRST_SECS && !fake("vote-tab"));
+        let mut tx = full.left() + m + 290.0;
+        for (label, t) in [("CARNAGE REPORT", 1u8), ("VOTE", 2)] {
+            let on = (t == 1) == showing;
+            let g = ui.painter().layout_no_wrap(label.into(), FontId::proportional(15.0), TEXT);
+            let rr = Rect::from_min_size(egui::pos2(tx, full.top() + 30.0), Vec2::new(g.size().x + 24.0, 30.0));
+            let resp = ui.interact(rr, ui.id().with(("carnage-tab", t)), Sense::click());
+            if on || resp.hovered() {
+                ui.painter().rect_filled(rr, 2.0, theme::HOVER);
+                ui.painter().line_segment([rr.left_bottom(), rr.right_bottom()], Stroke::new(2.0, ACCENT));
+            }
+            ui.painter().galley(rr.center() - g.size() / 2.0, g, if on || resp.hovered() { Color32::WHITE } else { DIM });
+            if resp.clicked() {
+                tab.1 = t;
+            }
+            tx = rr.right() + 8.0;
+        }
+        drop(tab);
+        if showing {
+            let area = Rect::from_min_max(centre.min, right.max);
+            let w = area.width().min(super::carnage::PANEL_W);
+            super::carnage::panel(ui, &r, egui::pos2(area.center().x, area.top()), w);
+            return;
+        }
+    }
     vote_column(ui, centre, v, o);
     players_column(ui, right);
 }
+
+/// Vote page tab per round: (round id, 0 automatic, 1 carnage report, 2 vote).
+static CARNAGE_TAB: Mutex<(u16, u8)> = Mutex::new((0, 0));
+/// Automatic tab: the carnage report for this long after the round opens, then the vote.
+const CARNAGE_FIRST_SECS: f32 = 8.0;
 
 fn game_column(ui: &egui::Ui, r: Rect, o: &vote::OpenMsg) {
     card(ui, r, None);
@@ -684,16 +733,18 @@ fn draw_call(ui: &mut egui::Ui, c: &callvote::View) {
         text(ui, egui::pos2(x, y), Align2::LEFT_CENTER, format!("YES {}   NO {}", st.yes, st.no), 13.0, TEXT);
         text(ui, egui::pos2(rx, y), Align2::RIGHT_CENTER, format!("{} OF {} NEEDED", st.needed, st.voters), 13.0, DIM);
         y += 20.0;
-        // Buttons.
+        // Buttons. Clickable only while the UI has the mouse (next-game page, Esc menu); in game the mouse is the
+        // engine's, so they are key hints (F5 / F6, input.rs) and the Esc menu's CALL A VOTE section takes clicks.
         let bw = (rx - x - 12.0) / 2.0;
+        let live = super::active();
         for (i, (k, label, col)) in [("F5", "YES", GREEN), ("F6", "NO", RED)].into_iter().enumerate() {
             let b = Rect::from_min_size(egui::pos2(x + i as f32 * (bw + 12.0), y), Vec2::new(bw, 34.0));
             let picked = c.mine == Some(i == 0);
-            let resp = ui.interact(b, ui.id().with(("call-btn", i)), Sense::click());
-            if resp.clicked() {
+            let resp = ui.interact(b, ui.id().with(("call-btn", i)), if live { Sense::click() } else { Sense::hover() });
+            if live && resp.clicked() {
                 callvote::cast(i == 0);
             }
-            ui.painter().rect_filled(b, 2.0, if picked { col.gamma_multiply(0.35) } else if resp.hovered() { theme::HOVER } else { Color32::TRANSPARENT });
+            ui.painter().rect_filled(b, 2.0, if picked { col.gamma_multiply(0.35) } else if live && resp.hovered() { theme::HOVER } else { Color32::TRANSPARENT });
             ui.painter().rect_stroke(b, 2.0, Stroke::new(if picked { 2.0 } else { 1.0 }, col), StrokeKind::Inside);
             let kr = key_chip(ui, egui::pos2(b.left() + 12.0, b.center().y), k, col);
             text(ui, egui::pos2(kr.right() + 10.0, b.center().y), Align2::LEFT_CENTER, label, 15.0, if picked { Color32::WHITE } else { TEXT });
@@ -742,6 +793,22 @@ pub fn call_section(ui: &mut egui::Ui) -> CallAction {
     ui.add_space(14.0);
     theme::caption(ui, "Call a vote");
     ui.add_space(4.0);
+    // A call vote is running: vote on it here (the in-game card only takes F5 / F6).
+    if let Some(v) = callvote::view() {
+        if let Some(st) = &v.status {
+            let kind = CallKind::from_byte(st.kind).unwrap_or(CallKind::Shuffle);
+            ui.label(egui::RichText::new(kind.question(&st.target)).size(15.0).color(TEXT));
+            ui.label(egui::RichText::new(format!("YES {}  NO {}  ·  {} of {} needed  ·  {} s", st.yes, st.no, st.needed, st.voters, st.secs_left)).size(12.5).color(DIM));
+            ui.add_space(4.0);
+            if theme::nav_item(ui, "Vote yes  (F5)", v.mine == Some(true)).clicked() {
+                callvote::cast(true);
+            }
+            if theme::nav_item(ui, "Vote no  (F6)", v.mine == Some(false)).clicked() {
+                callvote::cast(false);
+            }
+            return CallAction::None;
+        }
+    }
     let Some((mask, cooldown, busy)) = caps else {
         if vote::can_call() && theme::nav_item(ui, "Vote for a new game", false).clicked() {
             vote::call();

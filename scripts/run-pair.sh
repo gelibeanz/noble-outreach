@@ -6,6 +6,8 @@
 # Stop: WINEPREFIX=work/prefix-net <proton>/files/bin/wineserver -k
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 export WINEPREFIX="$ROOT/work/prefix-net"
+# Test games are silent (no Wine audio driver) so they never play over the desktop; SOUND=1 keeps sound.
+[ -n "${SOUND:-}" ] || export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:+$WINEDLLOVERRIDES;}winepulse.drv=d;winealsa.drv=d"
 export GAMEID="umu-976730"
 export PROTONPATH="$HOME/.local/share/Steam/compatibilitytools.d/GE-Proton11-5-x86_64"
 MCC_LINUX="${MCC_LINUX:-$ROOT/work/mcc}"

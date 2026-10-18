@@ -44,6 +44,8 @@ pub struct Spec {
     pub game_variant: Option<PathBuf>,
     pub map_variant: Option<PathBuf>,
     pub net: Option<NetGame>,
+    /// Campaign: a checkpoint (core save) to resume from (`--checkpoint`, checkpoint.rs).
+    pub saved_game: Option<PathBuf>,
 }
 
 /// A networked custom game: `players` instances, instance 0 hosts. Instance n is player n with xuid
@@ -186,6 +188,9 @@ pub unsafe fn build(spec: &Spec, mcc: &Path, data: *mut c_void, base: usize) -> 
         (id, index, Some((gv, mv)))
     };
     write_header(&mut b, spec, &id, index);
+    if let (Mode::Campaign { .. }, Some(f)) = (spec.mode, &spec.saved_game) {
+        crate::checkpoint::apply(&mut b.0, f)?;
+    }
     write_players(&mut b, spec);
     if let Some((game_variant, map_variant)) = variants {
         let copy: unsafe extern "system" fn(*mut c_void, *mut u8) = transmute(vfn(game_variant, VARIANT_COPY_TO_OPTIONS));
@@ -238,7 +243,14 @@ unsafe fn build_variants(spec: &Spec, mcc: &Path, data: *mut c_void, base: usize
     }
 
     let default_gv = if spec.mode == Mode::Firefight { "hr_ff_standard_1set.bin" } else { "slayer_054.bin" };
-    let gv_path = spec.game_variant.clone().unwrap_or_else(|| mcc.join("haloreach").join("game_variants").join(default_gv));
+    let stock = mcc.join("haloreach").join("game_variants").join(default_gv);
+    let mut gv_path = spec.game_variant.clone().unwrap_or_else(|| stock.clone());
+    // A joiner gets the host's game type (and map variant) through the session, so a server's custom/community
+    // game type we lack (Gun Game) only needs a stock stand-in of the same engine kind to launch with.
+    if !gv_path.is_file() && spec.net.as_ref().is_some_and(|n| n.instance != 0) {
+        log!("game variant {} missing; joining with stock {default_gv} (the session carries the host's)", gv_path.display());
+        gv_path = stock;
+    }
     let file = std::fs::read(&gv_path).map_err(|e| format!("read {}: {e}", gv_path.display()))?;
     let f: unsafe extern "system" fn(*mut c_void, *const u8, u32) -> *mut c_void = transmute(vfn(data, DA_GAME_VARIANT_FROM_FILE));
     let game_variant = f(data, file.as_ptr(), file.len() as u32);

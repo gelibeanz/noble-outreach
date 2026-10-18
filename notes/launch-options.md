@@ -76,7 +76,8 @@ Values in brackets are what MCC sent in the capture; "ours" is what reach-host w
 | +0x1CF00 | 0x408 | u32 1 + a `_fsm` BLF chunk (hash + signature of the game variant file) | present | zero |
 | +0x1D308 | 0xD9BC | map variant (libmcc reserves 0xE800) | | slot 7 copy |
 | +0x2BB08 | 0x408 | same as +0x1CF00 for the map variant | present | zero |
-| +0x2BF18 | ptr | saved-game state (non-zero → campaign resume path) | 0 | 0 |
+| +0x2BF10 | u32 | saved-game size (0xA60000 = core save in memory; campaign-firefight.md "Saves") | 0 | 0 |
+| +0x2BF18 | ptr | saved-game state (non-zero → campaign resume path, launch state 5) | 0 | 0 |
 | +0x2BF20 | ptr | film path (non-zero → theater path) | 0 | 0 |
 
 The engine reads the two 0x408 blocks only as an optional pointer (passed when their first byte is non-zero),

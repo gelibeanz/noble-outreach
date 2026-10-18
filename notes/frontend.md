@@ -210,8 +210,58 @@ Overlay pages: add a `Page` variant in `overlay.rs` and a branch in `draw_ui`.
 - Verified 2026-10-17 (hidden pair on 127.0.0.1:48850/48851, `--test-input`, captures looked at): team Slayer and FFA
   on both instances show the right deaths, scores, team scores and 0-1 ms pings; right-click mouse mode opened the
   menu, "Copy name" logged `Copied "Player 2"`; a dedicated server sent counts and pings to its client ("(1/4)").
-- **Open:** Firefight per-player score is still 0 (handover open item 2; candidates: statistic 7 in-game-total-score
-  above, or the survival globals, not checked). Pad users have no mouse mode (no pad navigation of the menu yet).
+- **Firefight score (fixed 2026-10-18):** the score table stays 0 in Firefight; the rows show the campaign metagame
+  score instead (stats.rs `firefight_score`, below). Pad users have no mouse mode (no pad navigation of the menu yet).
+
+## Game statistics (2026-10-18, `src/reach-host/src/stats.rs`)
+Read from the engine's game results (DLL .data, live during the game; static evidence: the MCC export
+`FUN_180039128`, called by BuildGameResultsForHost, reads every block below at these offsets).
+- **Player entries** 16 × 0xD8 at 0x1828c82a8 (u8 in use +0, u64 xuid +7). **Statistics** 16 × 0x708 at 0x1828c9200,
+  same order. One s16 per value, top bit masked off by the export (`& 0x7fff`).
+
+| Bytes in the 0x708 block | Content | Definition table / getter |
+|---|---|---|
+| +0x000, 20 words | player statistics (order in "Tab scoreboard"; 7 in-game-total-score, 8 kills, 9 assists, 10 deaths, 11 betrayals, 12 suicides, 13 most-kills-in-a-row, 14 seconds-alive) | 0x180b016f0 |
+| +0x028, 142 words | "commendation" progress (14 cookies first) | getter 0x1800fb490 |
+| **+0x144, 145 words** | **medal counts**, by medal index | getter 0x1800fb4b4 ("medal", 10 bits) |
+| +0x266, 50 words | tag-defined statistics | getter 0x1800fb4c8 (globals tag +0x168/+0x16C) |
+| **+0x300, 84 × 12 bytes** | **per damage reporting type**: u8 used, s16 kills (+2), deaths (+4), betrayals (+6), suicides (+8), headshots (+10) | 0x180b018c0; type names = tag enum 0x1809c0738 (0 guardians, 3 magnum, 4 assault rifle, 5 marksman rifle = DMR, 6 shotgun, 7 sniper, 8 rocket launcher, ... 83 sentinel gun) |
+| +0x6F0, 6 floats | damage totals (shield damage etc.) | 0x180b01830 |
+
+- After the stats: player-vs-player kills 16×16 u32 at 0x1828d0280, per-team/AI tables at 0x1828d0680, game event
+  log of 2000 × 0x24 at 0x1828d2f10 (not used yet).
+- **Results final:** u8 0x1828b83b1, set by BuildGameResultsForHost at game over (the moment the report is built).
+  Words 1 games-completed and 4 rounds-completed (+2 games-won, +5 rounds-won for winners) are written then.
+- **Medal names:** the medal block lives in the globals tag (count/entries via 0x180100ad0 / 0x180100b2c, 0x18-byte
+  entries, string id first). `MedalIndexFromStringId` 0x180100bac and `StringIdFromName` 0x18009db08 (lowercases,
+  ' '/'-' → '_') name them; the engine's own list of 0x74 {char* key, u32 MCC stat id} is at 0x180991410 (used by
+  0x180039b00 to fill the MCC medal map 0x180c1a840). 116 of the 145 medals get a key (log `stats: 116 medals named
+  by the engine`); stats.rs turns keys into Reach names (multikill_2 Double Kill, kill_spree_5 Killing Spree, ...).
+- **Firefight score** = `campaign_metagame_get_player_score` (hs; 0x1801b85bc → 0x1800a1718): TLS +0x190 → 8 records
+  of 0x2C (xuid +0, i32 score +8) minus TLS +0x488 → +4 + 8 × 0x20 (xuid +0, i32 +0x10), at least 0; multiplied by
+  a time factor only when metagame +0x19E bit 1 is set (campaign scoring). Records appear with the first points.
+- **Game mode byte** TLS +0x48 → +0x10: 2 Firefight, 3 multiplayer (seen live).
+- **Verified live** (work/run-carnage, `REACH_STATS_LOG=1` logs every changed word): Firefight solo ff10_prototype:
+  an AI kill moved word 8 (kills) and 13 (best spree), and weapon entry 5 (+0x33C used, +0x33E kills = 1, DMR);
+  deaths moved word 10 and the killer's damage type deaths (+0x3A0); the HUD showed 16 and `firefight_score` gave 16.
+  Not seen moving: assists (word 9, by the table order), medal counts (only from the export's offsets: no medal
+  could be scripted), a player-vs-player kill (teleporting the client's biped from the host desynced the client).
+
+## Carnage report (2026-10-18, `ui/carnage.rs`, data stats.rs)
+- At game over (results-final flag 0 → 1, polled by `stats::tick` from the overlay's passive frame and the host's
+  ping thread) each machine snapshots its scoreboard rows plus the game results; the **host** (listen or dedicated)
+  broadcasts its report 5 times, 1 s apart (RCRN, notes/networking.md), and clients show the host's report.
+- Page over the post-game for 20 s: "CARNAGE REPORT", headline (winning team / player / tie, or Firefight team
+  score), map and game type, column headers PLAYER / SCORE / K / D / A / K/D / BEST WEAPON / MEDALS (TOTAL), team
+  blocks in scoreboard colours (place and team score) or a ranked list, local row outlined in gold, top 2 medals
+  with counts and "+n". Firefight: SCORE is the Firefight score.
+- On the next-game vote page (ui/vote.rs) the report is the first tab: CARNAGE REPORT / VOTE next to the title, the
+  report shows for the first 8 s of the round, then the vote; a click switches, keys 1-4 vote and switch to VOTE.
+- Test hooks: `REACH_CARNAGE_FAKE=1` sample team game; `REACH_CARNAGE_SHOT=1` saves the page's 60th frame as
+  `carnage-<report id>.bmp`; with `REACH_VOTE_FAKE=next,page REACH_VOTE_SHOT=1` the vote page capture shows the tab.
+  Test scripts can `set teleport <x> <y> <z> <yaw> [player] [pitch]` (preview.rs teleport; a second self-teleport
+  once faulted at haloreach+0x14173, keep to one).
+
 
 ## Customize screen (2026-10-15)
 Main menu entry CUSTOMIZE (`customize.rs`), laid out after Reclaimer's: player card + rows (armour, colours, Spartan
@@ -257,6 +307,12 @@ Main menu entry CAMPAIGN (full window, Reclaimer's Halo 3 campaign screen adapte
   `--firefight M --difficulty D --game-variant V`); HOST CO-OP → the same flags through menu.rs
   `listen_args` (Host screen's port/name/master, Players slider 2..4). A campaign host gathers friends first (lobby panel, Enter starts; campaign-firefight.md "Campaign lobby on a listen host"). Last mission, difficulty and skulls saved in
   settings `campaign`. Keys: Up/Down mission, Left/Right difficulty, Enter play, Esc back / close picker.
+- Progress (2026-10-18, progress.rs → `reach-data/progress.json`): missions won per difficulty (bit mask, written at
+  game over without LEAVE GAME) and the last mission started (difficulty, skulls, insertion, won?). The list shows the
+  best difficulty won (name + icon) per mission and "n / 11 FINISHED"; difficulty cards say "✔ DONE". A CONTINUE card
+  on top of the list launches the last mission when it was not won (from its checkpoint when `saves/<m>.bin` exists),
+  else the next mission, else the first mission never won. RESUME CHECKPOINT (solo only) appears in the button row
+  when the selected mission has a save. Test: `REACH_UI_SHOT=campaign` with a seeded progress.json / saves dir.
 - Layout in points for 720 lines (ui::draw scales by height); list rows and banner share the space left.
   Checked at 1280x720 and 2560x1440.
 - **Art from the player's install at runtime (never in the repo):** `Data\UI\texturepacks\<pack>.perm.bin` = array of
@@ -315,3 +371,33 @@ Volume = `Settings.audio.menu_music` (Audio page, "Menu music"), re-read live; 0
 - Test hooks: `REACH_VOTE_FAKE=next,call[,page]` (made-up next-game round / call vote; `page` forces the page after 150
   frames), `REACH_VOTE_SHOT=1` (`vote-panel.bmp` frame 90, `vote-page.bmp` frame 240, `vote-result.bmp`); test script
   `vote call <shuffle|kick|skip|restart> [name]`, `vote yes|no`, `vote teams`, `vote members`, `vote team <name> <t>`.
+
+## Multiplayer screens (2026-10-18, `ui/play_screen.rs`, `catalog.rs`)
+PLAY and HOST GAME are one full-window screen in the CAMPAIGN style (HOST adds a SERVER step). Steps: GAME TYPE
+(category chips All / Slayer / Objective / Infection / Party / Invasion / Firefight / Forge, type-to-filter search,
+Any / FFA / Teams, Matchmaking on/off) → MAP (built-in maps, then the map's variants: default first, Bungie's,
+matchmaking, saved Forge maps; Firefight: map + difficulty) → SERVER (name, players, master, port).
+Keys: type = search (no click needed; `widgets::search_box`), Up/Down/PgUp/PgDn pick, Left/Right category (map
+step: map list / variant list), Enter next step / start, Esc clears the search, then steps back.
+Picks are saved as `last_variant`, `last_map`, `last_map_variant` (settings.json).
+
+Catalog facts (both `.bin` and `.mvar` are BLF; offsets from file start):
+| What | Where |
+|------|-------|
+| content header | `chdr` at +0x30, content at +0x40 (0x2B0 bytes); next chunk at 0x30 + BE size at +0x34 (= +0x2F0) |
+| engine | content +0x2A u8: 1 Forge, 2 Megalo, 3 campaign, 4 Firefight |
+| base map of a map variant | content +0x2C i32 = mapinfo id (`maps/info/<stem>.mapinfo` u32 BE at +0x3C), e.g. 3006 Forge World |
+| name / description | content +0x80 / +0x180, UTF-16LE (some are `$...` localisation keys: titles then come from the file name) |
+| game type icon, teams | `mpvr` bit stream: name + description again as null-terminated UTF-16BE, then 8 bits icon (0 CTF, 1 Slayer, 2 Oddball, 3 KOTH, 4 Juggernaut, 5 Territories, 6 Assault, 7 Infection, 9 Invasion, 10 Invasion Slayer, 11 Stockpile, 13 Race, 14 Rocket Race, 15 Grifball, 17 Headhunter, 20 other), 1 bit, 1 bit teams on |
+
+Found empirically over all 474 shipped + hopper game types (consistent with file names: `hr_ffa_*` teams off,
+`*_team_*` on). Scan of the frozen build: 419 game types, 20 maps, 266 map variants (172 on Forge World), ~0.3 s,
+started in the background when the menu starts. Art: `CG_<TYPE>` banners and `PLAYERHUB_<TYPE>` icons (packs
+already indexed by mccart.rs), `HREACHMP_<MAP>` / `HREACHMP_<MAP>LARGE` for maps.
+Community content (custom folder, Steam Workshop; COMMUNITY chip): notes/community.md.
+Hopper files: `catalog::game_variant_path` / `map_variant_path` fall back to `hopper_*` folders, so joins, votes and
+playlists accept them by file name.
+Test hooks: `REACH_UI_SHOT=play-screen,play-map,host,host-map,host-server,play-ff,host-ff`, picks/filters via
+`REACH_UI_MP="cat=objective q=flag teams=ffa hopper=0 gv=<file> map=<stem> mv=<file>"`. Checked 2026-10-18:
+`REACH_UI_MP="gv=ctf_054.bin map=forge_halo mv=hr_forgeWorld_pinnacle.mvar" REACH_UI_SHOT=play-map,play` →
+CTF on Pinnacle (Forge pieces, flag, "Pillar" callout).

@@ -533,6 +533,7 @@ pub fn host_overrides() -> Vec<(usize, usize)> {
         (116, slot_get_gamepad_mapping as *const () as usize),
         (118, slot_118 as *const () as usize),
         (26, slot_get_next_game_options as *const () as usize),
+        (5, crate::checkpoint::slot_auto_save as *const () as usize),
     ]
     .into_iter()
     .chain(crate::text::overrides()) // 51 settings, 61-67 fonts

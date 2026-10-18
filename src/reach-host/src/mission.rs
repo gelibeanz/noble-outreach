@@ -29,6 +29,14 @@ pub fn reset() {
     PEERS.store(0, Ordering::Relaxed);
 }
 
+/// Map stem of the menu-launched campaign mission being played (checkpoint saves are kept per mission).
+pub fn current_mission() -> Option<String> {
+    if DONE.load(Ordering::Relaxed) {
+        return None; // won: saves made while the mission ends are not checkpoints to resume
+    }
+    current().map(|c| c.0)
+}
+
 fn current() -> Option<(String, String, std::path::PathBuf)> {
     CURRENT.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
@@ -39,6 +47,8 @@ pub fn on_game_over() {
     if crate::ui::overlay::leave_requested().is_some() || DONE.swap(true, Ordering::Relaxed) {
         return;
     }
+    crate::progress::record_finished(&stem, crate::progress::difficulty_index(&difficulty));
+    crate::checkpoint::remove(&stem);
     let Some(next) = crate::ui::campaign::next_mission(&stem, &mcc) else {
         log!("mission: {stem} finished; it was the last mission, back to the menu");
         return;

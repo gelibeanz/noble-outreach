@@ -5,6 +5,9 @@
 mod audio;
 mod browser;
 mod callvote;
+mod catalog;
+mod checkpoint;
+mod coop;
 mod crash;
 mod dormant;
 mod forge;
@@ -20,9 +23,11 @@ mod options;
 mod ping;
 mod preview;
 mod probe;
+mod progress;
 mod query;
 mod playlist;
 mod seamless;
+mod stats;
 mod vote;
 mod profile;
 mod text;
@@ -96,7 +101,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
     let mut mcc = std::env::var_os("MCC_PATH").map(PathBuf::from);
     let mut options = None;
     let mut no_launch = false;
-    let mut build = options::Spec { mode: options::Mode::Multiplayer, difficulty: 1, skulls: 0, map: None, game_variant: None, map_variant: None, net: None };
+    let mut build = options::Spec { mode: options::Mode::Multiplayer, difficulty: 1, skulls: 0, map: None, game_variant: None, map_variant: None, net: None, saved_game: None };
     let mut insertion = 0i32;
     let mut role: Option<String> = None;
     let mut instance: Option<u32> = None;
@@ -152,6 +157,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             "--playlist" => _ = it.next(), // applied by playlist::apply before parsing
             "--vote-secs" => _ = it.next(), // read by vote::parse
             "--campaign-jip" => {} // read by lobby::parse
+            "--coop-max" => _ = it.next(), // read by coop::parse
             "--warp" => warp = true,
             "--size" => {
                 let v = it.next().ok_or("--size needs WxH")?;
@@ -207,6 +213,8 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
                 };
             }
             "--skulls" => build.skulls = options::parse_skulls(&it.next().ok_or("--skulls needs iron,blind,...")?)?,
+            // Resume a campaign checkpoint saved by host slot 5 (checkpoint.rs).
+            "--checkpoint" => build.saved_game = Some(PathBuf::from(it.next().ok_or("--checkpoint needs a save file")?)),
             "--insertion" => insertion = it.next().ok_or("--insertion needs N")?.parse().map_err(|e| format!("--insertion: {e}"))?,
             "--game-variant" => build.game_variant = Some(PathBuf::from(it.next().ok_or("--game-variant needs a value")?)),
             "--map-variant" => build.map_variant = Some(PathBuf::from(it.next().ok_or("--map-variant needs a value")?)),
@@ -244,9 +252,9 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
                 log!("join-server: campaign lobby, {} player(s) in, mission starts in {} s", r.players, r.lobby_secs);
             }
         }
-        let gv = mcc.join("haloreach").join("game_variants").join(&s.game_variant);
+        let gv = catalog::game_variant_path(mcc, &s.game_variant); // shipped or matchmaking (hopper) game type
         if !gv.is_file() {
-            return Err(format!("game variant {} is not in your MCC files ({})", s.game_variant, gv.display()));
+            log!("join-server: game variant {} not in your MCC files; the session carries the server's", s.game_variant);
         }
         role = Some("client".into());
         // Dedicated and listen servers (menu HOST) accept any identity 1..65535 and learn our address from our
@@ -285,6 +293,22 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
     }
     if options.is_some() && build.wanted() {
         return Err("--options and --map/--game-variant/--map-variant are exclusive".into());
+    }
+    // Campaign and Firefight are 4-player co-op unless `--coop-max N` lifts the engine's campaign limit (coop.rs).
+    // A client joining a co-op server with more slots patches its own engine to match; so does a listen host (menu
+    // HOST CO-OP) asked for more than 4 players, the menu's player choice being the setting.
+    // A dedicated joiner may be started with only `--map` (the server's mode decides), so ff*/m<digit> maps count too.
+    coop::parse(argv)?;
+    let coop_map = build.map.as_deref().is_some_and(|m| m.starts_with("ff") || (m.len() > 1 && m.as_bytes()[0] == b'm' && m.as_bytes()[1].is_ascii_digit()));
+    let coop_mode = matches!(build.mode, options::Mode::Campaign { .. } | options::Mode::Firefight);
+    if (coop_map && role.as_deref() == Some("client")) || (coop_mode && listen) {
+        coop::enable_for(players);
+    }
+    if coop_mode {
+        if role.as_deref() == Some("host") && players > coop::cap() {
+            log!("co-op: {players} players asked for, capped at {} (raise with --coop-max N, up to {})", coop::cap(), coop::MAX);
+            players = coop::cap();
+        }
     }
     let net = match role.as_deref() {
         None => None,
@@ -460,6 +484,7 @@ fn run() -> Result<(), String> {
         input::set_mouse_sens(player.mouse_sens as f64);
     }
     if menu {
+        catalog::prefetch(&args.mcc); // game types and map variants for PLAY / HOST, scanned while the window opens
         ui::set_active(true); // before input::init, so it does not grab the mouse
         if let Some(m) = &args.master {
             std::env::set_var("REACH_MASTER", m); // browser::master_list; inherited by a relaunched menu
@@ -589,6 +614,7 @@ fn reset_game_state() {
     ui::overlay::reset();
     input::reset_game();
     ui::scoreboard::reset();
+    stats::reset();
     mission::reset();
     lobby::reset();
     net::reset_game();
@@ -607,6 +633,8 @@ unsafe fn play_game(args: &Args, argv: &[String], from_menu: bool, gfx: &Gfx, dl
         if let Some(map) = &args.build.map {
             let difficulty = ["easy", "normal", "heroic", "legendary"][args.build.difficulty.clamp(0, 3) as usize];
             mission::set_current((map.clone(), difficulty.into(), args.mcc.clone()));
+            let insertion = if let options::Mode::Campaign { insertion } = args.build.mode { insertion } else { 0 };
+            progress::record_start(map, args.build.difficulty.clamp(0, 3) as u8, args.build.skulls, insertion);
         }
     }
 
@@ -632,9 +660,11 @@ unsafe fn play_game(args: &Args, argv: &[String], from_menu: bool, gfx: &Gfx, dl
         *((base + 0x263ea75) as *mut u8) = 1;
         log!("--no-render: engine render-skip byte haloreach+0x263ea75 set");
     }
+    coop::install(base); // --coop-max: campaign co-op beyond 4 (any instance)
     if args.dedicated() {
         throttle::install(base); // game thread has no frame limiter (notes/dedicated.md)
         lobby::install_jip(base);
+        lobby::install_revert_noverify(base);
     } else if args.net.as_ref().is_some_and(|n| n.instance == 0) {
         throttle::install_tick_only(base); // game-thread tick that drops peers saying bye (net.rs)
     }
@@ -828,6 +858,9 @@ unsafe fn play_game(args: &Args, argv: &[String], from_menu: bool, gfx: &Gfx, dl
         cpu.tick();
         if lobby::LISTEN.load(std::sync::atomic::Ordering::Relaxed) {
             hold_launch_for_first_player(base, args.net.as_ref().map_or(0, |n| n.players)); // state-8 timers
+        }
+        if args.net.as_ref().is_some_and(|n| n.instance != 0) {
+            lobby::client_hold(base); // joiner waiting in a campaign lobby: no 60 s give-up
         }
         if args.dedicated() {
             hold_launch_for_first_player(base, args.net.as_ref().map_or(0, |n| n.players));
