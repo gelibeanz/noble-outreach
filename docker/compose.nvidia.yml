@@ -1,0 +1,15 @@
+# NVIDIA GPU for the dedicated server instead of software Vulkan. Use with compose.yml:
+#   COMPOSE_FILE=compose.yml:compose.nvidia.yml   (in .env), and NVIDIA_VERSION = host driver version
+# Needs the NVIDIA Container Toolkit on the host.
+services:
+  reach-server:
+    build:
+      args:
+        GPU: nvidia
+        NVIDIA_VERSION: ${NVIDIA_VERSION:?set NVIDIA_VERSION in .env (nvidia-smi driver version)}
+    runtime: nvidia
+    mem_limit: ${REACH_MEM_LIMIT:-2560m}
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: all
+      __GL_SHADER_DISK_CACHE_PATH: /data/nv-cache

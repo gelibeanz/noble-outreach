@@ -1,6 +1,6 @@
 [package]
 name = "reach-master"
-version = "0.4.2"
+version = "0.4.3"
 edition = "2021"
 description = "Master server for reach-host: servers register by heartbeat, clients list them (JSON over HTTP)"
 

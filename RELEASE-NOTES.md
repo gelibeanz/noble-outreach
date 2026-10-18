@@ -1,19 +1,28 @@
-# Noble Outreach 0.4.2
+# Noble Outreach 0.4.3
 
 A standalone community client for Halo: Reach on PC. It runs the engine from your own Steam copy of Halo: The
-Master Chief Collection. This release brings new PLAY and HOST screens with every game type and map variant in
+Master Chief Collection. 0.4.3 lets the dedicated server run **without a GPU** (see *Dedicated server* below).
+The rest of these notes cover 0.4.x as a whole: new PLAY and HOST screens with every game type and map variant in
 your files, campaign progress and checkpoints, a carnage report after each game, co-op for up to 8 players, and
 community game types and maps.
 
 **You need:** MCC on Steam, build **2025.08.16** (`2025.08.16.178512.1`), with Halo: Reach installed. Linux
 also needs [umu-launcher](https://github.com/Open-Wine-Components/umu-launcher). The launcher updates itself from
-0.2.0 and 0.3.x.
+0.2.0, 0.3.x and 0.4.x.
 
 ## Downloads
 - `NobleOutreach-Launcher.exe` (Windows, unsigned: SmartScreen > More info > Run anyway) or
   `NobleOutreach-Launcher-linux` (`chmod +x`). The launcher installs and updates the game client.
-- `NobleOutreach-Server-v0.4.2.tar.gz`: dedicated server (`reach-host.exe --dedicated`) and a static `reach-master`.
+- `NobleOutreach-Server-v0.4.3.tar.gz`: dedicated server (`reach-host.exe --dedicated`) and a static `reach-master`.
 - `reach-host.exe` and `SHA256SUMS` are what the launcher downloads and checks.
+
+## Dedicated server (0.4.3)
+- **No GPU needed.** The Docker server now runs on software Vulkan (Mesa's lavapipe) and draws nothing
+  (`--no-render`), so it runs on any x86-64 Linux box or cloud server: about a third of one CPU core and about
+  2 GB of RAM with players in. The container's memory limit is now 4 GB (`REACH_MEM_LIMIT`).
+- **NVIDIA is optional:** set `COMPOSE_FILE=compose.yml:compose.nvidia.yml` and `NVIDIA_VERSION` in `.env` to
+  render on an NVIDIA GPU as before (less RAM: the textures sit on the GPU). Existing NVIDIA setups need those two
+  lines, or they switch to the software path on the next build.
 
 ## PLAY and HOST
 - **Every game type in your files.** PLAY and HOST list all of Reach's game types (custom games, 2010
@@ -57,6 +66,7 @@ also needs [umu-launcher](https://github.com/Open-Wine-Components/umu-launcher).
   rendezvous enabled.
 - More than 4 players in campaign or Firefight is new: it is checked on our own test runs, not yet in long games.
 - Works with one exact MCC build only. When Steam updates MCC, wait for a matching release.
-- A dedicated server in Docker needs an NVIDIA GPU. AMD and Intel GPUs are untested.
+- The Docker server's NVIDIA option (`compose.nvidia.yml`) was not rebuilt for this release; the default, GPU-free
+  setup is the tested one.
 
 Not affiliated with Microsoft, 343 Industries or Halo Studios. No game files are included. GPL-3.0.

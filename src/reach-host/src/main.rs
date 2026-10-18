@@ -12,6 +12,7 @@ mod crash;
 mod dormant;
 mod forge;
 mod host;
+mod importtrace;
 mod input;
 mod lobby;
 mod mission;
@@ -523,6 +524,7 @@ fn run() -> Result<(), String> {
         };
         host::WINDOW.store(hwnd.0 as usize, std::sync::atomic::Ordering::Relaxed);
         host::SWAPCHAIN.store(gfx.swapchain.as_raw() as usize, std::sync::atomic::Ordering::Relaxed);
+        importtrace::install_d3d(gfx.device.as_raw(), gfx.context.as_raw(), gfx.swapchain.as_raw());
         log!(
             "D3D11 device {:?}, context {:?}, flip-model swap chain {:?}",
             gfx.device.as_raw(),
@@ -668,6 +670,7 @@ unsafe fn play_game(args: &Args, argv: &[String], from_menu: bool, gfx: &Gfx, dl
     } else if args.net.as_ref().is_some_and(|n| n.instance == 0) {
         throttle::install_tick_only(base); // game-thread tick that drops peers saying bye (net.rs)
     }
+    importtrace::install(base); // REACH_IMPORT_TRACE=1: count the engine's Windows calls (notes/native-linux.md)
     log!("loaded {} at {base:#x}", dll_path.display());
     let get = |name: &'static [u8]| -> Result<usize, String> {
         GetProcAddress(module, PCSTR(name.as_ptr()))

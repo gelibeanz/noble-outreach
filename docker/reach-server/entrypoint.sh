@@ -15,6 +15,7 @@
 #   REACH_PUBLIC_ADDR  public ip:port players use (a UDP tunnel address, or your forwarded port). Empty = the
 #                      master fills in the address it sees the heartbeat from, with port 47800.
 #   REACH_ARGS         extra reach-host arguments, split on spaces
+#   REACH_RENDER       off = --no-render (set by the image's GPU=cpu build: lavapipe, nothing drawn), on = draw
 #   REACH_PLAYLIST     playlist file in /playlists: players vote on the next game (overrides mode/map)
 set -eu
 
@@ -54,6 +55,8 @@ fi
 : "${REACH_PUBLIC_ADDR:=}"
 : "${REACH_MASTER:=}"
 : "${REACH_ARGS:=}"
+: "${REACH_RENDER:=on}"
+[ "$REACH_RENDER" = off ] && REACH_ARGS="$REACH_ARGS --no-render"
 
 if [ ! -f "$WINEPREFIX/system.reg" ]; then
   echo "[reach-server] creating Wine prefix in $WINEPREFIX"

@@ -1,6 +1,6 @@
 [package]
 name = "reach-tracer"
-version = "0.4.2"
+version = "0.4.3"
 edition = "2021"
 description = "Proxy haloreach.dll: records how MCC drives the Reach engine (launch options, host callbacks)"
 

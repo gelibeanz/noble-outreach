@@ -2,7 +2,8 @@
 #
 #   cp .env.example .env            then edit it (MCC_DIR at least)
 #   cp /path/to/reach-host.exe reach-server/     (from a release, or your own build)
-#   docker compose up -d                           server only (listed on REACH_MASTER if set)
+#   docker compose up -d                           server only (listed on REACH_MASTER if set); no GPU needed
+#   NVIDIA GPU instead: COMPOSE_FILE=compose.yml:compose.nvidia.yml in .env (and NVIDIA_VERSION)
 #   docker compose --profile master up -d          + your own master server on TCP 47880 / UDP 47881
 #   docker compose --profile firewall up -d        + egress lockdown for the server (Linux hosts, iptables)
 #
@@ -11,7 +12,8 @@
 name: noble-outreach
 
 services:
-  # Dedicated Halo: Reach server: reach-host.exe --dedicated under Wine + DXVK in a hidden Xvfb window. It exits
+  # Dedicated Halo: Reach server: reach-host.exe --dedicated under Wine + DXVK in a hidden Xvfb window, on
+  # software Vulkan (lavapipe) with rendering off, or on an NVIDIA GPU with compose.nvidia.yml. It exits
   # when the last player leaves and the entrypoint starts a fresh one. Strangers' UDP reaches a 2010 engine, so
   # it runs locked down: non-root, no capabilities, read-only root fs (writable: /data and tmpfs /tmp).
   reach-server:
@@ -21,13 +23,11 @@ services:
       args:
         UID: ${PUID:-1000}
         GID: ${PGID:-1000}
-        NVIDIA_VERSION: ${NVIDIA_VERSION:?set NVIDIA_VERSION in .env (nvidia-smi driver version)}
     networks: [reach-net]
     ports:
       - "47800:47800/udp"
     # Public resolvers only (the firewall profile lets DNS out to exactly these; keep REACH_FW_DNS in step).
     dns: [1.1.1.1, 1.0.0.1]
-    runtime: nvidia
     user: "${PUID:-1000}:${PGID:-1000}"
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
@@ -36,10 +36,7 @@ services:
       - /tmp:size=64m,mode=1777
     pids_limit: 400
     environment:
-      NVIDIA_VISIBLE_DEVICES: all
-      NVIDIA_DRIVER_CAPABILITIES: all
       HOME: /tmp
-      __GL_SHADER_DISK_CACHE_PATH: /data/nv-cache
       REACH_MODE: ${REACH_MODE:-slayer}
       REACH_MAP: ${REACH_MAP:-}
       REACH_VARIANT: ${REACH_VARIANT:-}
@@ -55,7 +52,9 @@ services:
       - ${MCC_DIR:?set MCC_DIR in .env}:/mcc:ro
       - ./data:/data
       - ../playlists:/playlists:ro
-    mem_limit: 2560m
+    # Software Vulkan keeps the map's textures in RAM: about 2 GB in game (2.5 GB is too tight). With
+    # compose.nvidia.yml they sit on the GPU and 2560m is enough.
+    mem_limit: ${REACH_MEM_LIMIT:-4g}
     restart: unless-stopped
     stop_grace_period: 10s
 

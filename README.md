@@ -45,15 +45,18 @@ More detail: [notes/launcher-README.txt](notes/launcher-README.txt).
 if that doesn't open the port, forward **UDP 47800** on your router (or use a UDP tunnel) and share the public
 address. With a master server configured, the game is also listed there and NAT punching is tried.
 
-### Dedicated server (Docker, Linux + NVIDIA GPU)
-The engine needs a GPU even with nobody watching, so the server runs under Wine + DXVK in a hidden X display.
-See [docker/](docker/):
+### Dedicated server (Docker, Linux, no GPU needed)
+The server runs under Wine + DXVK in a hidden X display. By default it needs no GPU: Vulkan runs in software
+(Mesa's lavapipe) and the server draws nothing, so it runs on any x86-64 Linux box or cloud server. It uses about
+a third of one CPU core and about 2 GB of RAM with players in. See [docker/](docker/):
 ```sh
 cd docker
-cp .env.example .env                 # set MCC_DIR (your MCC folder) and NVIDIA_VERSION
+cp .env.example .env                 # set MCC_DIR (your MCC folder)
 cp /path/to/reach-host.exe reach-server/   # from the release's server bundle, or your own build
 docker compose up -d                 # add --profile firewall for the egress lockdown
 ```
+To run it on an NVIDIA GPU instead (less RAM: the textures sit on the GPU), set `COMPOSE_FILE` and
+`NVIDIA_VERSION` in `.env` as shown there; that needs the NVIDIA Container Toolkit.
 It listens on UDP 47800. By default it isn't listed anywhere: players join by address. Set `REACH_MASTER` to list
 it on a master server. Modes: Slayer, Firefight, campaign co-op, or a playlist from [playlists/](playlists/)
 that players vote on.
