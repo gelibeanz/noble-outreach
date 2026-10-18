@@ -1,4 +1,4 @@
-# Noble Outreach 0.4.1
+# Noble Outreach 0.4.2
 
 A standalone community client for Halo: Reach on PC. It runs the engine from your own Steam copy of Halo: The
 Master Chief Collection. This release brings new PLAY and HOST screens with every game type and map variant in
@@ -12,7 +12,7 @@ also needs [umu-launcher](https://github.com/Open-Wine-Components/umu-launcher).
 ## Downloads
 - `NobleOutreach-Launcher.exe` (Windows, unsigned: SmartScreen > More info > Run anyway) or
   `NobleOutreach-Launcher-linux` (`chmod +x`). The launcher installs and updates the game client.
-- `NobleOutreach-Server-v0.4.1.tar.gz`: dedicated server (`reach-host.exe --dedicated`) and a static `reach-master`.
+- `NobleOutreach-Server-v0.4.2.tar.gz`: dedicated server (`reach-host.exe --dedicated`) and a static `reach-master`.
 - `reach-host.exe` and `SHA256SUMS` are what the launcher downloads and checks.
 
 ## PLAY and HOST

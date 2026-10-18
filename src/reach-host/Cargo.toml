@@ -1,6 +1,6 @@
 [package]
 name = "reach-host"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2021"
 description = "Standalone Halo: Reach host: loads haloreach.dll, supplies window, D3D11 swap chain and the host interface"
 
